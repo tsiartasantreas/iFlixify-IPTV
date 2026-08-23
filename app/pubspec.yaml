@@ -75,7 +75,7 @@ dependencies:
   share_plus: ^10.1.4
 
   # Sentry — crash reporting and performance monitoring.
-  sentry_flutter: ^8.10.0
+  sentry_flutter: ^9.27.0
 
   # in_app_purchase — Google Play Billing for Pro upgrade.
   in_app_purchase: ^3.2.0
