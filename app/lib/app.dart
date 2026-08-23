@@ -1,9 +1,4 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
-
-import 'core/data/supabase_client.dart';
-import 'core/data/sync_coordinator.dart';
 import 'core/theme/app_colors.dart';
 import 'core/theme/netflix_theme.dart';
 import 'features/shell/main_shell.dart';
@@ -36,21 +31,9 @@ class _FlixiumAppState extends State<FlixiumApp> {
   }
 
   Future<void> _bootstrap() async {
-    // Initialize Supabase lazily so auth works when the user signs in
-    // from Settings. The app runs fully in guest mode without it.
-    try {
-      await SupabaseService.initialize();
-    } catch (e) {
-      // If Supabase fails to initialize (e.g. no network), the app can
-      // still run in guest mode. Log the error for debugging.
-      // ignore: avoid_print
-      print('[FlixiumApp] Supabase initialization failed (guest mode active): $e');
-    }
-
-    // If a returning user has a persisted session, sync their cloud data
-    // (favourites, watch progress) so it is available immediately.
-    unawaited(SyncCoordinator.maybeFullSync());
-
+    // Do NOT initialize Supabase at startup. It is initialized lazily
+    // when the user signs in (auth_screen) or opens settings.
+    // This ensures the UI renders immediately on first install.
     if (mounted) {
       setState(() {
         _initialized = true;

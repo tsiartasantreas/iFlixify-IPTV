@@ -27,7 +27,17 @@ import 'widgets/continue_watching_row.dart';
 /// and a "Recently Added" cross-type row.
 /// Displays an empty state with an import button if no playlists exist.
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  const HomeScreen({
+    super.key,
+    this.tabChangeNotifier,
+    this.tabIndex = 0,
+  });
+
+  /// Notifier from the parent shell that fires when the active tab changes.
+  final ValueNotifier<int>? tabChangeNotifier;
+
+  /// The index of this tab in the parent shell's navigation.
+  final int tabIndex;
 
   @override
   State<HomeScreen> createState() => HomeScreenState();
@@ -50,6 +60,10 @@ class HomeScreenState extends State<HomeScreen> {
   bool _isLoading = true;
   bool _parentalLocked = false;
 
+  /// Tracks the last seen tab-change notifier value so we only reload when
+  /// the tab actually changes (not on the initial build).
+  int _lastSeenChangeCount = 0;
+
   /// Whether the entitlement tier has been fetched at least once.
   ///
   /// [EntitlementService.isPro] is a synchronous getter over a cached tier
@@ -71,10 +85,13 @@ class HomeScreenState extends State<HomeScreen> {
     _loadContent();
     // Listen for background import progress changes.
     _importProgress.progressNotifier.addListener(_onImportProgressChanged);
+    // Listen for tab changes from the parent shell.
+    widget.tabChangeNotifier?.addListener(_onTabChange);
   }
 
   @override
   void dispose() {
+    widget.tabChangeNotifier?.removeListener(_onTabChange);
     _importProgress.progressNotifier.removeListener(_onImportProgressChanged);
     super.dispose();
   }
@@ -96,6 +113,16 @@ class HomeScreenState extends State<HomeScreen> {
     if (progress != null && progress.isComplete && !progress.hasError) {
       _loadContent();
     }
+  }
+
+  /// Called when the parent shell switches tabs. Reloads content if this
+  /// screen just became visible (skips the initial build).
+  void _onTabChange() {
+    if (!mounted) return;
+    final currentValue = widget.tabChangeNotifier!.value;
+    if (currentValue == _lastSeenChangeCount) return;
+    _lastSeenChangeCount = currentValue;
+    _loadContent();
   }
 
   /// Dismisses the completed import banner.

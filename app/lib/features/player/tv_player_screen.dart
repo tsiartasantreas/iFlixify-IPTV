@@ -228,6 +228,10 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
     // ignore: avoid_print
     print('[TvPlayerScreen] _tryResume attempt $_resumeAttempts → seeking to ${target.inSeconds}s (current: ${ctrl.position.inSeconds}s, duration: ${ctrl.duration.inSeconds}s)');
     ctrl.seek(target);
+    // Resume playback after seeking (the player was paused during resume).
+    if (!ctrl.isPlaying) {
+      ctrl.play();
+    }
   }
 
   /// Reacts to player state changes: resume seek, pause save, completion.
@@ -1008,7 +1012,7 @@ class _TvDownloadOverlayButtonState extends State<_TvDownloadOverlayButton> {
     if (mounted) setState(() => _isDownloaded = result);
   }
 
-  void _onTap() {
+  Future<void> _onTap() async {
     if (!_canDownload) return;
     if (_isDownloaded) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1019,19 +1023,30 @@ class _TvDownloadOverlayButtonState extends State<_TvDownloadOverlayButton> {
       );
       return;
     }
-    _service.enqueueDownload(
+    await _service.enqueueDownload(
       contentId: widget.contentId,
       url: widget.url,
       title: widget.title,
       contentType: widget.contentType,
       thumbnailUrl: widget.thumbnailUrl,
     );
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Download started'),
-        duration: Duration(seconds: 2),
-      ),
-    );
+    if (!mounted) return;
+    // Re-check in case the item was hydrated as already downloaded.
+    if (_isDownloaded) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Already downloaded'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Download started'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   @override

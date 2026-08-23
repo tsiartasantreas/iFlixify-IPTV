@@ -463,6 +463,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
               await prefs.setBool('use_external_player', value);
             },
           ),
+          _buildNavigationTile(
+            icon: Icons.restore,
+            title: 'Reset Player Selection',
+            subtitle: 'Choose a different external video player on next play',
+            onTap: _resetExternalPlayerSelection,
+          ),
 
           const SizedBox(height: 16),
 
@@ -1281,6 +1287,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await ParentalControlService.instance.setAdultContentVisible(showAdult);
     if (mounted) {
       setState(() => _hideAdultContent = !showAdult);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Open download folder
+  // ---------------------------------------------------------------------------
+
+  // ---------------------------------------------------------------------------
+  // Reset external player selection
+  // ---------------------------------------------------------------------------
+
+  Future<void> _resetExternalPlayerSelection() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('external_player_package');
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+              'Player selection reset. You will be asked to choose a player on next play.'),
+          backgroundColor: AppColors.bgSurface,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     }
   }
 

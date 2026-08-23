@@ -451,7 +451,7 @@ class _DetailScreenState extends State<DetailScreen> {
     if (!mounted) return;
 
     final controller = PlayerController();
-    controller.open(playbackUrl);
+    await controller.open(playbackUrl, autoPlay: startPosition == null || startPosition <= Duration.zero);
 
     final playerScreen = _isTv
         ? TvPlayerScreen(
@@ -481,6 +481,7 @@ class _DetailScreenState extends State<DetailScreen> {
             url: widget.url,
           );
 
+    if (!mounted) return;
     Navigator.of(context)
         .push(MaterialPageRoute(builder: (_) => playerScreen))
         .then((_) => controller.dispose());
@@ -492,18 +493,125 @@ class _DetailScreenState extends State<DetailScreen> {
 
   /// Opens [playbackUrl] in an external video player (e.g. VLC, MX Player).
   ///
-  /// Uses `externalApplication` so Android shows the app chooser for video
-  /// players instead of the browser. Skips `canLaunchUrl` which is unreliable
-  /// on Android 11+ (returns false for apps that haven't declared intent
-  /// filters for the URL scheme).
+  /// On the first launch, shows a player selection dialog so the user can
+  /// choose their preferred video player. The selection is saved to
+  /// SharedPreferences so subsequent plays go directly to the chosen player.
   Future<void> _launchExternalPlayer(String playbackUrl) async {
-    final uri = Uri.parse(playbackUrl);
+    final prefs = await SharedPreferences.getInstance();
+    String? savedPackage = prefs.getString('external_player_package');
 
-    // Launch directly — Android's intent resolution will show the app
-    // chooser if multiple video players are installed (VLC, MX Player, etc.).
-    // No canLaunchUrl check: it returns false on Android 11+ for non-browser
-    // apps due to package visibility rules.
+    if (savedPackage == null || savedPackage.isEmpty) {
+      // No player selected yet — show the selection dialog.
+      if (!mounted) return;
+      final selected = await _showPlayerSelectionDialog();
+      if (selected == null) return; // User cancelled.
+      savedPackage = selected;
+      await prefs.setString('external_player_package', savedPackage);
+    }
+
+    await _launchWithPlayer(playbackUrl, savedPackage);
+  }
+
+  /// Shows a dialog listing common external video players and returns the
+  /// selected player's Android package name, or null if the user cancelled.
+  Future<String?> _showPlayerSelectionDialog() {
+    final players = <Map<String, String>>[
+      {
+        'name': 'VLC',
+        'package': 'org.videolan.vlc',
+        'icon': '🎬',
+      },
+      {
+        'name': 'MX Player',
+        'package': 'com.mxtech.videoplayer.ad',
+        'icon': '▶️',
+      },
+      {
+        'name': 'MX Player Pro',
+        'package': 'com.mxtech.videoplayer.pro',
+        'icon': '▶️',
+      },
+    ];
+
+    return showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.bgElevated,
+        title: const Text(
+          'Choose Video Player',
+          style: TextStyle(color: AppColors.textPrimary),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Select which player to use for external playback. '
+              'You can change this later in Settings.',
+              style: TextStyle(color: AppColors.textSecondary, fontSize: 14),
+            ),
+            const SizedBox(height: 16),
+            ...players.map(
+              (player) => ListTile(
+                leading: Text(
+                  player['icon']!,
+                  style: const TextStyle(fontSize: 24),
+                ),
+                title: Text(
+                  player['name']!,
+                  style: const TextStyle(
+                    color: AppColors.textPrimary,
+                    fontSize: 16,
+                  ),
+                ),
+                onTap: () => Navigator.of(context).pop(player['package']),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: AppColors.textSecondary),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Launches [playbackUrl] using the external player identified by
+  /// [packageName] via an Android VIEW intent.
+  Future<void> _launchWithPlayer(
+      String playbackUrl, String packageName) async {
+    // Build an intent URI that targets the specific package.
+    final intentUri = Uri.parse(
+      'intent:$playbackUrl#Intent;'
+      'action=android.intent.action.VIEW;'
+      'type=video/*;'
+      'package=$packageName;'
+      'end',
+    );
+
     try {
+      final launched = await launchUrl(
+        intentUri,
+        mode: LaunchMode.externalApplication,
+      );
+      if (launched) return;
+    } catch (e) {
+      // ignore: avoid_print
+      print('[DetailScreen] Intent launch failed for $packageName: $e');
+    }
+
+    // Fallback: try launching the raw URL with externalApplication so
+    // Android's default app chooser handles it.
+    try {
+      final uri = Uri.parse(playbackUrl);
       final launched = await launchUrl(
         uri,
         mode: LaunchMode.externalApplication,
@@ -511,15 +619,14 @@ class _DetailScreenState extends State<DetailScreen> {
       if (launched) return;
     } catch (e) {
       // ignore: avoid_print
-      print('[DetailScreen] External application launch failed: $e');
+      print('[DetailScreen] Fallback external launch failed: $e');
     }
 
-    // Nothing worked
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-              'Failed to open external player. Install VLC or MX Player.'),
+              'Failed to open external player. Make sure VLC or MX Player is installed.'),
           backgroundColor: AppColors.bgSurface,
           behavior: SnackBarBehavior.floating,
         ),

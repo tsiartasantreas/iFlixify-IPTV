@@ -19,7 +19,17 @@ import '../player/tv_player_screen.dart';
 /// Shows active and queued downloads with progress indicators.
 /// Supports tap-to-play and long-press-to-delete.
 class OfflineScreen extends StatefulWidget {
-  const OfflineScreen({super.key});
+  const OfflineScreen({
+    super.key,
+    this.tabChangeNotifier,
+    this.tabIndex = 0,
+  });
+
+  /// Notifier from the parent shell that fires when the active tab changes.
+  final ValueNotifier<int>? tabChangeNotifier;
+
+  /// The index of this tab in the parent shell's navigation.
+  final int tabIndex;
 
   @override
   State<OfflineScreen> createState() => _OfflineScreenState();
@@ -32,6 +42,10 @@ class _OfflineScreenState extends State<OfflineScreen> {
   Map<String, DownloadProgress> _activeDownloads = {};
   bool _isLoading = true;
   StreamSubscription<Map<String, DownloadProgress>>? _progressSub;
+
+  /// Tracks the last seen tab-change notifier value so we only reload when
+  /// the tab actually changes (not on the initial build).
+  int _lastSeenChangeCount = 0;
 
   bool get _isTv =>
       Platform.isLinux ||
@@ -48,6 +62,8 @@ class _OfflineScreenState extends State<OfflineScreen> {
     debugPrint('[OfflineScreen] initState: loading downloaded items from DB');
     _loadItems();
     _listenToProgress();
+    // Listen for tab changes from the parent shell.
+    widget.tabChangeNotifier?.addListener(_onTabChange);
   }
 
   void _listenToProgress() {
@@ -71,6 +87,16 @@ class _OfflineScreenState extends State<OfflineScreen> {
         _loadItems();
       }
     });
+  }
+
+  /// Called when the parent shell switches tabs. Reloads items if this
+  /// screen just became visible (skips the initial build).
+  void _onTabChange() {
+    if (!mounted) return;
+    final currentValue = widget.tabChangeNotifier!.value;
+    if (currentValue == _lastSeenChangeCount) return;
+    _lastSeenChangeCount = currentValue;
+    _loadItems();
   }
 
   Future<void> _loadItems() async {
@@ -376,6 +402,10 @@ class _OfflineScreenState extends State<OfflineScreen> {
         .toList();
   }
 
+  Future<void> _onRefresh() async {
+    await _loadItems();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -396,7 +426,12 @@ class _OfflineScreenState extends State<OfflineScreen> {
             )
           : _items.isEmpty && _inProgressDownloads.isEmpty
               ? _buildEmptyState()
-              : _buildContent(),
+              : RefreshIndicator(
+                  color: AppColors.accentPrimary,
+                  backgroundColor: AppColors.bgElevated,
+                  onRefresh: _onRefresh,
+                  child: _buildContent(),
+                ),
     );
   }
 
@@ -734,6 +769,7 @@ class _OfflineScreenState extends State<OfflineScreen> {
 
   @override
   void dispose() {
+    widget.tabChangeNotifier?.removeListener(_onTabChange);
     _progressSub?.cancel();
     // Do NOT close the download service -- it's a singleton.
     super.dispose();

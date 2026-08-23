@@ -250,7 +250,7 @@ class PlayerController extends ChangeNotifier {
   ///
   /// If the stream does not begin playback within 15 seconds an error is set
   /// automatically. Call [retry] to re-open the same URL.
-  Future<void> open(String url, {PlayerConfig? config}) async {
+  Future<void> open(String url, {PlayerConfig? config, bool autoPlay = true}) async {
     // Clear any previous error.
     _error = null;
     _lastUrl = url;
@@ -283,7 +283,7 @@ class PlayerController extends ChangeNotifier {
     );
 
     try {
-      await _player.open(media);
+      await _player.open(media, play: autoPlay);
       // ignore: avoid_print
       print('[PlayerController] _player.open() succeeded');
     } catch (e, st) {
@@ -308,7 +308,7 @@ class PlayerController extends ChangeNotifier {
       );
 
       try {
-        await _player.open(fallbackMedia);
+        await _player.open(fallbackMedia, play: autoPlay);
         // ignore: avoid_print
         print('[PlayerController] Fallback open() succeeded');
       } catch (e2, st2) {

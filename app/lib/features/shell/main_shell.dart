@@ -9,13 +9,15 @@ import '../favorites/favorites_screen.dart';
 import '../home/home_screen.dart';
 import '../offline/offline_screen.dart';
 import '../search/search_screen.dart';
+import '../settings/settings_screen.dart';
+import '../import/import_screen.dart';
 import 'mobile_nav.dart';
 import 'tv_left_rail.dart';
 
 /// Root navigation shell that switches between mobile and TV layouts.
 ///
 /// Mobile layout: six-tab bottom navigation bar.
-/// TV layout: eight-item left vertical rail.
+/// TV layout: ten-item left vertical rail.
 /// TV mode is detected via screen shortest side exceeding 960 px on Android
 /// or always on Linux.
 class MainShell extends StatefulWidget {
@@ -41,6 +43,10 @@ class _MainShellState extends State<MainShell> with RouteAware {
   /// the persisted preferences.
   bool _prefsLoaded = false;
 
+  /// Notifier that increments every time the active tab changes.
+  /// Child screens listen to this to know when to refresh their data.
+  final _tabChangeNotifier = ValueNotifier<int>(0);
+
   /// Whether the UI should use the TV layout.
   ///
   /// Controlled exclusively by the user's "TV Mode" toggle in Settings.
@@ -61,6 +67,7 @@ class _MainShellState extends State<MainShell> with RouteAware {
 
   @override
   void dispose() {
+    _tabChangeNotifier.dispose();
     routeObserver.unsubscribe(this);
     super.dispose();
   }
@@ -102,6 +109,7 @@ class _MainShellState extends State<MainShell> with RouteAware {
         _mobileIndex = index;
       }
     });
+    _tabChangeNotifier.value++;
   }
 
   // ---------------------------------------------------------------------------
@@ -113,35 +121,88 @@ class _MainShellState extends State<MainShell> with RouteAware {
       // Six tabs: Home, Live TV, Movies, Series, Radio, Downloads.
       switch (index) {
         case 0: // Home
-          return const HomeScreen();
+          return HomeScreen(
+            tabChangeNotifier: _tabChangeNotifier,
+            tabIndex: index,
+          );
         case 1: // Live TV
-          return const BrowseScreen(contentType: 'live', title: 'Live TV');
+          return BrowseScreen(
+            contentType: 'live',
+            title: 'Live TV',
+            tabChangeNotifier: _tabChangeNotifier,
+            tabIndex: index,
+          );
         case 2: // Movies
-          return const BrowseScreen(contentType: 'vod', title: 'Movies');
+          return BrowseScreen(
+            contentType: 'vod',
+            title: 'Movies',
+            tabChangeNotifier: _tabChangeNotifier,
+            tabIndex: index,
+          );
         case 3: // Series
-          return const BrowseScreen(contentType: 'series', title: 'Series');
+          return BrowseScreen(
+            contentType: 'series',
+            title: 'Series',
+            tabChangeNotifier: _tabChangeNotifier,
+            tabIndex: index,
+          );
         case 4: // Radio
-          return const BrowseScreen(contentType: 'radio', title: 'Radio');
+          return BrowseScreen(
+            contentType: 'radio',
+            title: 'Radio',
+            tabChangeNotifier: _tabChangeNotifier,
+            tabIndex: index,
+          );
         case 5: // Downloads
-          return const OfflineScreen();
+          return OfflineScreen(
+            tabChangeNotifier: _tabChangeNotifier,
+            tabIndex: index,
+          );
         default:
-          return const HomeScreen();
+          return HomeScreen(
+            tabChangeNotifier: _tabChangeNotifier,
+            tabIndex: index,
+          );
       }
     } else {
       // Five tabs: Home, Live TV, Movies, Series, Downloads (Radio hidden).
       switch (index) {
         case 0: // Home
-          return const HomeScreen();
+          return HomeScreen(
+            tabChangeNotifier: _tabChangeNotifier,
+            tabIndex: index,
+          );
         case 1: // Live TV
-          return const BrowseScreen(contentType: 'live', title: 'Live TV');
+          return BrowseScreen(
+            contentType: 'live',
+            title: 'Live TV',
+            tabChangeNotifier: _tabChangeNotifier,
+            tabIndex: index,
+          );
         case 2: // Movies
-          return const BrowseScreen(contentType: 'vod', title: 'Movies');
+          return BrowseScreen(
+            contentType: 'vod',
+            title: 'Movies',
+            tabChangeNotifier: _tabChangeNotifier,
+            tabIndex: index,
+          );
         case 3: // Series
-          return const BrowseScreen(contentType: 'series', title: 'Series');
+          return BrowseScreen(
+            contentType: 'series',
+            title: 'Series',
+            tabChangeNotifier: _tabChangeNotifier,
+            tabIndex: index,
+          );
         case 4: // Downloads
-          return const OfflineScreen();
+          return OfflineScreen(
+            tabChangeNotifier: _tabChangeNotifier,
+            tabIndex: index,
+          );
         default:
-          return const HomeScreen();
+          return HomeScreen(
+            tabChangeNotifier: _tabChangeNotifier,
+            tabIndex: index,
+          );
       }
     }
   }
@@ -149,23 +210,59 @@ class _MainShellState extends State<MainShell> with RouteAware {
   Widget _buildTvTab(int index) {
     switch (index) {
       case 0: // Home
-        return const HomeScreen();
+        return HomeScreen(
+          tabChangeNotifier: _tabChangeNotifier,
+          tabIndex: index,
+        );
       case 1: // Series
-        return const BrowseScreen(contentType: 'series', title: 'Series');
+        return BrowseScreen(
+          contentType: 'series',
+          title: 'Series',
+          tabChangeNotifier: _tabChangeNotifier,
+          tabIndex: index,
+        );
       case 2: // Movies
-        return const BrowseScreen(contentType: 'vod', title: 'Movies');
+        return BrowseScreen(
+          contentType: 'vod',
+          title: 'Movies',
+          tabChangeNotifier: _tabChangeNotifier,
+          tabIndex: index,
+        );
       case 3: // Live TV
-        return const BrowseScreen(contentType: 'live', title: 'Live TV');
+        return BrowseScreen(
+          contentType: 'live',
+          title: 'Live TV',
+          tabChangeNotifier: _tabChangeNotifier,
+          tabIndex: index,
+        );
       case 4: // Radio
-        return const BrowseScreen(contentType: 'radio', title: 'Radio');
+        return BrowseScreen(
+          contentType: 'radio',
+          title: 'Radio',
+          tabChangeNotifier: _tabChangeNotifier,
+          tabIndex: index,
+        );
       case 5: // My List
-        return const FavoritesScreen();
+        return FavoritesScreen(
+          tabChangeNotifier: _tabChangeNotifier,
+          tabIndex: index,
+        );
       case 6: // Search
         return const SearchScreen();
       case 7: // Downloads
-        return const OfflineScreen();
+        return OfflineScreen(
+          tabChangeNotifier: _tabChangeNotifier,
+          tabIndex: index,
+        );
+      case 8: // Settings
+        return const SettingsScreen();
+      case 9: // Import Playlist
+        return const ImportScreen();
       default:
-        return const HomeScreen();
+        return HomeScreen(
+          tabChangeNotifier: _tabChangeNotifier,
+          tabIndex: index,
+        );
     }
   }
 

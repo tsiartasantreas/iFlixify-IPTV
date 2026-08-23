@@ -16,10 +16,21 @@ import '../detail/detail_screen.dart';
 /// thumbnail images. Supports tap to navigate to detail and long-press to
 /// remove from favourites. Shows an empty state when no favourites exist.
 class FavoritesScreen extends StatefulWidget {
-  const FavoritesScreen({super.key, this.database});
+  const FavoritesScreen({
+    super.key,
+    this.database,
+    this.tabChangeNotifier,
+    this.tabIndex = 0,
+  });
 
   /// Database instance -- injectable for testing.
   final AppDatabase? database;
+
+  /// Notifier from the parent shell that fires when the active tab changes.
+  final ValueNotifier<int>? tabChangeNotifier;
+
+  /// The index of this tab in the parent shell's navigation.
+  final int tabIndex;
 
   @override
   State<FavoritesScreen> createState() => _FavoritesScreenState();
@@ -29,6 +40,10 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
   AppDatabase? _db;
   List<_FavoriteItem> _items = [];
   bool _isLoading = true;
+
+  /// Tracks the last seen tab-change notifier value so we only reload when
+  /// the tab actually changes (not on the initial build).
+  int _lastSeenChangeCount = 0;
 
   bool get _isTv =>
       Platform.isLinux ||
@@ -43,6 +58,24 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
   void initState() {
     super.initState();
     _db = widget.database;
+    _loadFavorites();
+    // Listen for tab changes from the parent shell.
+    widget.tabChangeNotifier?.addListener(_onTabChange);
+  }
+
+  @override
+  void dispose() {
+    widget.tabChangeNotifier?.removeListener(_onTabChange);
+    super.dispose();
+  }
+
+  /// Called when the parent shell switches tabs. Reloads favorites if this
+  /// screen just became visible (skips the initial build).
+  void _onTabChange() {
+    if (!mounted) return;
+    final currentValue = widget.tabChangeNotifier!.value;
+    if (currentValue == _lastSeenChangeCount) return;
+    _lastSeenChangeCount = currentValue;
     _loadFavorites();
   }
 
@@ -229,6 +262,10 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
   // Build
   // ---------------------------------------------------------------------------
 
+  Future<void> _onRefresh() async {
+    await _loadFavorites();
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
@@ -241,7 +278,12 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
       return _buildEmptyState();
     }
 
-    return _buildGrid();
+    return RefreshIndicator(
+      color: AppColors.accentPrimary,
+      backgroundColor: AppColors.bgElevated,
+      onRefresh: _onRefresh,
+      child: _buildGrid(),
+    );
   }
 
   // ---------------------------------------------------------------------------

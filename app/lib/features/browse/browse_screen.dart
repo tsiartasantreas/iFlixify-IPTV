@@ -25,6 +25,8 @@ class BrowseScreen extends StatefulWidget {
     super.key,
     required this.contentType,
     required this.title,
+    this.tabChangeNotifier,
+    this.tabIndex = 0,
   });
 
   /// Content type: "live", "vod", "series", or "radio".
@@ -32,6 +34,12 @@ class BrowseScreen extends StatefulWidget {
 
   /// Display title for the app bar.
   final String title;
+
+  /// Notifier from the parent shell that fires when the active tab changes.
+  final ValueNotifier<int>? tabChangeNotifier;
+
+  /// The index of this tab in the parent shell's navigation.
+  final int tabIndex;
 
   @override
   State<BrowseScreen> createState() => BrowseScreenState();
@@ -51,6 +59,10 @@ class BrowseScreenState extends State<BrowseScreen> with RouteAware {
   /// Whether parental controls are active (adult content hidden).
   bool _parentalLocked = false;
 
+  /// Tracks the last seen tab-change notifier value so we only reload when
+  /// the tab actually changes (not on the initial build).
+  int _lastSeenChangeCount = 0;
+
   /// Map from EPG channelId to the current programme title.
   Map<String, String> _epgCurrentTitles = {};
 
@@ -62,6 +74,8 @@ class BrowseScreenState extends State<BrowseScreen> with RouteAware {
     // Listen for background import progress changes so we can refresh
     // when a playlist import completes.
     _importProgress.progressNotifier.addListener(_onImportProgressChanged);
+    // Listen for tab changes from the parent shell.
+    widget.tabChangeNotifier?.addListener(_onTabChange);
   }
 
   @override
@@ -75,6 +89,7 @@ class BrowseScreenState extends State<BrowseScreen> with RouteAware {
 
   @override
   void dispose() {
+    widget.tabChangeNotifier?.removeListener(_onTabChange);
     routeObserver.unsubscribe(this);
     _importProgress.progressNotifier.removeListener(_onImportProgressChanged);
     super.dispose();
@@ -96,6 +111,16 @@ class BrowseScreenState extends State<BrowseScreen> with RouteAware {
     if (progress != null && progress.isComplete && !progress.hasError) {
       _loadItems();
     }
+  }
+
+  /// Called when the parent shell switches tabs. Reloads items if this
+  /// screen just became visible (skips the initial build).
+  void _onTabChange() {
+    if (!mounted) return;
+    final currentValue = widget.tabChangeNotifier!.value;
+    if (currentValue == _lastSeenChangeCount) return;
+    _lastSeenChangeCount = currentValue;
+    _loadItems();
   }
 
   // ---------------------------------------------------------------------------

@@ -87,18 +87,23 @@ class _EpisodeDownloadButtonState extends State<EpisodeDownloadButton> {
     }
   }
 
-  void _startDownload() {
-    _downloadService.enqueueDownload(
+  Future<void> _startDownload() async {
+    await _downloadService.enqueueDownload(
       contentId: widget.contentId,
       url: widget.url,
       title: widget.title,
       contentType: 'series',
       thumbnailUrl: widget.thumbnailUrl,
     );
-    setState(() {
-      _isDownloading = true;
-      _progress = 0;
-    });
+    // If the item was already downloaded (e.g. hydrated from DB), the
+    // progress stream will have already updated _isDownloaded. Only show
+    // the downloading state if the download was actually enqueued.
+    if (mounted && !_isDownloaded) {
+      setState(() {
+        _isDownloading = true;
+        _progress = 0;
+      });
+    }
   }
 
   void _cancelDownload() {

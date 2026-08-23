@@ -117,6 +117,7 @@ class OfflineDownloadService {
   final Queue<_DownloadTask> _queue = Queue();
   final Map<String, StreamSubscription<dynamic>> _activeSubscriptions = {};
   bool _isProcessing = false;
+  bool _hydrated = false;
 
   // Progress broadcast: every subscriber gets the latest state for all downloads.
   final _progressController =
@@ -126,13 +127,20 @@ class OfflineDownloadService {
   /// Stream of all current download progress states, keyed by contentId.
   ///
   /// Emits the full map on every change so subscribers always have the latest
-  /// snapshot.
-  Stream<Map<String, DownloadProgress>> get progressStream =>
-      _progressController.stream;
+  /// snapshot. Triggers lazy hydration from the database on first access.
+  Stream<Map<String, DownloadProgress>> get progressStream {
+    if (!_hydrated) _hydrateFromDatabase();
+    return _progressController.stream;
+  }
 
   /// Current snapshot of all download progress states.
-  Map<String, DownloadProgress> get currentProgress =>
-      Map.unmodifiable(_progressMap);
+  ///
+  /// Triggers lazy hydration from the database on first access so completed
+  /// downloads are visible after an app restart.
+  Map<String, DownloadProgress> get currentProgress {
+    if (!_hydrated) _hydrateFromDatabase();
+    return Map.unmodifiable(_progressMap);
+  }
 
   // ---------------------------------------------------------------------------
   // Public API
@@ -149,15 +157,35 @@ class OfflineDownloadService {
   /// the queue reaches it.
   ///
   /// If the content is already downloaded or already in the queue, this is a
-  /// no-op.
-  void enqueueDownload({
+  /// no-op. Hydrates from the database first to catch items that were
+  /// downloaded in a previous session.
+  Future<void> enqueueDownload({
     required String contentId,
     required String url,
     required String title,
     required String contentType,
     String? thumbnailUrl,
-  }) {
-    // Already downloaded?
+  }) async {
+    if (!_hydrated) await _hydrateFromDatabase();
+
+    // Check database for existing download (catches items persisted in a
+    // previous session that may not yet be in _progressMap).
+    if (await isDownloaded(contentId)) {
+      if (!_progressMap.containsKey(contentId)) {
+        _progressMap[contentId] = DownloadProgress(
+          contentId: contentId,
+          title: title,
+          contentType: contentType,
+          thumbnailUrl: thumbnailUrl,
+          state: DownloadState.completed,
+          progress: 1.0,
+        );
+        _emitProgress();
+      }
+      return;
+    }
+
+    // Already downloaded in progress map?
     if (_progressMap[contentId]?.state == DownloadState.completed) return;
     // Already queued or downloading?
     if (_progressMap.containsKey(contentId) &&
@@ -339,12 +367,15 @@ class OfflineDownloadService {
   }
 
   /// Returns `true` if the content is already downloaded.
+  ///
+  /// Uses `limit(2)` instead of `getSingleOrNull()` to safely handle
+  /// potential duplicate rows without throwing.
   Future<bool> isDownloaded(String contentId) async {
-    final item = await (_db.select(_db.downloadedItems)
+    final items = await (_db.select(_db.downloadedItems)
           ..where((t) => t.contentId.equals(contentId))
-          ..limit(1))
-        .getSingleOrNull();
-    return item != null;
+          ..limit(2))
+        .get();
+    return items.isNotEmpty;
   }
 
   /// Returns the local file path for a downloaded item, or `null` if not
@@ -525,6 +556,29 @@ class OfflineDownloadService {
         .getSingleOrNull();
     debugPrint('[OfflineDownloadService] _executeDownload: post-insert verification '
         'contentId=${task.contentId} -> ${verifyItem != null ? "FOUND (id=${verifyItem.id}, path=${verifyItem.filePath})" : "NOT FOUND"}');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Hydration
+  // ---------------------------------------------------------------------------
+
+  /// Loads all completed downloads from the Drift database into [_progressMap]
+  /// so the UI can see them after an app restart.
+  Future<void> _hydrateFromDatabase() async {
+    if (_hydrated) return;
+    final items = await _db.select(_db.downloadedItems).get();
+    for (final item in items) {
+      _progressMap[item.contentId] = DownloadProgress(
+        contentId: item.contentId,
+        title: item.title,
+        contentType: item.contentType,
+        state: DownloadState.completed,
+        progress: 1.0,
+        thumbnailUrl: item.thumbnailUrl,
+      );
+    }
+    _hydrated = true;
+    _emitProgress();
   }
 
   // ---------------------------------------------------------------------------
