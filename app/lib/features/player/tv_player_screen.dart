@@ -349,6 +349,7 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
                 child: Video(
                   controller: ctrl.videoController,
                   controls: (state) => const SizedBox.shrink(),
+                  subtitleViewConfiguration: _buildSubtitleConfig(),
                 ),
               ),
 
@@ -640,19 +641,16 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
               ),
             ),
           // Download button
-          if (widget.contentId != null &&
-              widget.url != null &&
-              widget.contentType != null)
-            Padding(
-              padding: const EdgeInsets.only(left: 8),
-              child: _TvDownloadOverlayButton(
-                contentId: widget.contentId!,
-                url: widget.url!,
-                title: widget.title,
-                contentType: widget.contentType!,
-                thumbnailUrl: widget.poster,
-              ),
+          Padding(
+            padding: const EdgeInsets.only(left: 8),
+            child: _TvDownloadOverlayButton(
+              contentId: widget.contentId ?? '',
+              url: widget.url ?? '',
+              title: widget.title,
+              contentType: widget.contentType ?? '',
+              thumbnailUrl: widget.poster,
             ),
+          ),
         ],
       ),
     );
@@ -746,6 +744,22 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Subtitle configuration
+  // ---------------------------------------------------------------------------
+
+  /// Builds a [SubtitleViewConfiguration] from the current subtitle prefs.
+  SubtitleViewConfiguration _buildSubtitleConfig() {
+    return SubtitleViewConfiguration(
+      style: TextStyle(
+        fontSize: _subtitleFontSize,
+        color: Colors.white,
+        backgroundColor: Colors.black.withValues(alpha: _subtitleBgOpacity),
+      ),
+      textScaler: const TextScaler.linear(1.0),
     );
   }
 
@@ -985,12 +999,17 @@ class _TvDownloadOverlayButtonState extends State<_TvDownloadOverlayButton> {
     _checkDownloaded();
   }
 
+  bool get _canDownload =>
+      widget.contentId.isNotEmpty && widget.url.isNotEmpty;
+
   Future<void> _checkDownloaded() async {
+    if (!_canDownload) return;
     final result = await _service.isDownloaded(widget.contentId);
     if (mounted) setState(() => _isDownloaded = result);
   }
 
   void _onTap() {
+    if (!_canDownload) return;
     if (_isDownloaded) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(

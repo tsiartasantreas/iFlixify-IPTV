@@ -464,6 +464,8 @@ class _DetailScreenState extends State<DetailScreen> {
             onPreviousChannel: onPrevious,
             contentId: watchContentId,
             startPosition: startPosition,
+            poster: widget.imageUrl,
+            url: widget.url,
           )
         : PlayerScreen(
             controller: controller,
@@ -475,6 +477,8 @@ class _DetailScreenState extends State<DetailScreen> {
             onPreviousChannel: onPrevious,
             contentId: watchContentId,
             startPosition: startPosition,
+            poster: widget.imageUrl,
+            url: widget.url,
           );
 
     Navigator.of(context)
@@ -489,33 +493,16 @@ class _DetailScreenState extends State<DetailScreen> {
   /// Opens [playbackUrl] in an external video player (e.g. VLC, MX Player).
   ///
   /// Uses `externalApplication` so Android shows the app chooser for video
-  /// players instead of the browser.
+  /// players instead of the browser. Skips `canLaunchUrl` which is unreliable
+  /// on Android 11+ (returns false for apps that haven't declared intent
+  /// filters for the URL scheme).
   Future<void> _launchExternalPlayer(String playbackUrl) async {
     final uri = Uri.parse(playbackUrl);
 
-    // Check if any app can handle this URL first.
-    try {
-      final canLaunch = await canLaunchUrl(uri);
-      if (!canLaunch) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                  'No external video player found. Install VLC or MX Player.'),
-              backgroundColor: AppColors.bgSurface,
-              behavior: SnackBarBehavior.floating,
-            ),
-          );
-        }
-        return;
-      }
-    } catch (e) {
-      // ignore: avoid_print
-      print('[DetailScreen] canLaunchUrl check failed: $e');
-    }
-
-    // Launch with externalApplication which shows the Android app chooser
-    // for video players (VLC, MX Player, etc.) instead of the browser.
+    // Launch directly — Android's intent resolution will show the app
+    // chooser if multiple video players are installed (VLC, MX Player, etc.).
+    // No canLaunchUrl check: it returns false on Android 11+ for non-browser
+    // apps due to package visibility rules.
     try {
       final launched = await launchUrl(
         uri,

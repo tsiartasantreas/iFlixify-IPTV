@@ -459,6 +459,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                   child: Video(
                     controller: ctrl.videoController,
                     controls: (state) => const SizedBox.shrink(),
+                    subtitleViewConfiguration: _buildSubtitleConfig(),
                   ),
                 ),
 
@@ -784,16 +785,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
               size: 22,
             ),
           // Download button
-          if (widget.contentId != null &&
-              widget.url != null &&
-              widget.contentType != null)
-            _DownloadOverlayButton(
-              contentId: widget.contentId!,
-              url: widget.url!,
-              title: widget.title,
-              contentType: widget.contentType!,
-              thumbnailUrl: widget.poster,
-            ),
+          _DownloadOverlayButton(
+            contentId: widget.contentId ?? '',
+            url: widget.url ?? '',
+            title: widget.title,
+            contentType: widget.contentType ?? '',
+            thumbnailUrl: widget.poster,
+          ),
         ],
       ),
     );
@@ -970,6 +968,22 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   // ---------------------------------------------------------------------------
+  // Subtitle configuration
+  // ---------------------------------------------------------------------------
+
+  /// Builds a [SubtitleViewConfiguration] from the current subtitle prefs.
+  SubtitleViewConfiguration _buildSubtitleConfig() {
+    return SubtitleViewConfiguration(
+      style: TextStyle(
+        fontSize: _subtitleFontSize,
+        color: Colors.white,
+        backgroundColor: Colors.black.withValues(alpha: _subtitleBgOpacity),
+      ),
+      textScaler: const TextScaler.linear(1.0),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
   // Subtitle settings
   // ---------------------------------------------------------------------------
 
@@ -986,89 +1000,107 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void _showSubtitleSettings() {
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       backgroundColor: AppColors.bgSurface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.7,
+      ),
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setModalState) {
-            return Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Subtitle Settings',
-                    style: TextStyle(
-                      color: AppColors.textPrimary,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
+            return SingleChildScrollView(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Drag handle
+                    Center(
+                      child: Container(
+                        width: 40,
+                        height: 4,
+                        margin: const EdgeInsets.only(bottom: 16),
+                        decoration: BoxDecoration(
+                          color: AppColors.textSecondary.withValues(alpha: 0.4),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 20),
-                  // Font size
-                  Text(
-                    'Font Size: ${_subtitleFontSize.round()}px',
-                    style: const TextStyle(
-                      color: AppColors.textSecondary,
-                      fontSize: 14,
+                    const Text(
+                      'Subtitle Settings',
+                      style: TextStyle(
+                        color: AppColors.textPrimary,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      _fontSizeButton(14, setModalState),
-                      const SizedBox(width: 8),
-                      _fontSizeButton(18, setModalState),
-                      const SizedBox(width: 8),
-                      _fontSizeButton(24, setModalState),
-                      const SizedBox(width: 8),
-                      _fontSizeButton(32, setModalState),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-                  // Background opacity
-                  Text(
-                    'Background Opacity: ${(_subtitleBgOpacity * 100).round()}%',
-                    style: const TextStyle(
-                      color: AppColors.textSecondary,
-                      fontSize: 14,
+                    const SizedBox(height: 20),
+                    // Font size
+                    Text(
+                      'Font Size: ${_subtitleFontSize.round()}px',
+                      style: const TextStyle(
+                        color: AppColors.textSecondary,
+                        fontSize: 14,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  SliderTheme(
-                    data: SliderThemeData(
-                      activeTrackColor: AppColors.accentPrimary,
-                      inactiveTrackColor: AppColors.bgSurface,
-                      thumbColor: AppColors.accentPrimary,
-                      overlayColor: AppColors.accentPrimary.withValues(alpha: 0.2),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        _fontSizeButton(14, setModalState),
+                        const SizedBox(width: 8),
+                        _fontSizeButton(18, setModalState),
+                        const SizedBox(width: 8),
+                        _fontSizeButton(24, setModalState),
+                        const SizedBox(width: 8),
+                        _fontSizeButton(32, setModalState),
+                      ],
                     ),
-                    child: Slider(
-                      value: _subtitleBgOpacity,
-                      min: 0.0,
-                      max: 1.0,
-                      divisions: 10,
-                      onChanged: (val) async {
-                        setModalState(() => _subtitleBgOpacity = val);
-                        setState(() => _subtitleBgOpacity = val);
-                        final prefs = await SharedPreferences.getInstance();
-                        await prefs.setDouble('subtitle_bg_opacity', val);
-                      },
+                    const SizedBox(height: 20),
+                    // Background opacity
+                    Text(
+                      'Background Opacity: ${(_subtitleBgOpacity * 100).round()}%',
+                      style: const TextStyle(
+                        color: AppColors.textSecondary,
+                        fontSize: 14,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Styling will be applied when subtitle rendering is enabled.',
-                    style: TextStyle(
-                      color: AppColors.textSecondary,
-                      fontSize: 12,
-                      fontStyle: FontStyle.italic,
+                    const SizedBox(height: 8),
+                    SliderTheme(
+                      data: SliderThemeData(
+                        activeTrackColor: AppColors.accentPrimary,
+                        inactiveTrackColor: AppColors.bgSurface,
+                        thumbColor: AppColors.accentPrimary,
+                        overlayColor: AppColors.accentPrimary.withValues(alpha: 0.2),
+                      ),
+                      child: Slider(
+                        value: _subtitleBgOpacity,
+                        min: 0.0,
+                        max: 1.0,
+                        divisions: 10,
+                        onChanged: (val) async {
+                          setModalState(() => _subtitleBgOpacity = val);
+                          setState(() => _subtitleBgOpacity = val);
+                          final prefs = await SharedPreferences.getInstance();
+                          await prefs.setDouble('subtitle_bg_opacity', val);
+                        },
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 16),
-                ],
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Styling will be applied when subtitle rendering is enabled.',
+                      style: TextStyle(
+                        color: AppColors.textSecondary,
+                        fontSize: 12,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                ),
               ),
             );
           },
@@ -1148,12 +1180,17 @@ class _DownloadOverlayButtonState extends State<_DownloadOverlayButton> {
     _checkDownloaded();
   }
 
+  bool get _canDownload =>
+      widget.contentId.isNotEmpty && widget.url.isNotEmpty;
+
   Future<void> _checkDownloaded() async {
+    if (!_canDownload) return;
     final result = await _service.isDownloaded(widget.contentId);
     if (mounted) setState(() => _isDownloaded = result);
   }
 
   void _onTap() {
+    if (!_canDownload) return;
     if (_isDownloaded) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
