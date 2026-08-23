@@ -255,7 +255,7 @@ class _PinSetDialogState extends State<_PinSetDialog> {
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
+          const Text(
             'Set a 4-digit PIN to restrict adult content. '
             'Content rated 18+ or containing "XXX" will be hidden '
             'until the PIN is entered.',

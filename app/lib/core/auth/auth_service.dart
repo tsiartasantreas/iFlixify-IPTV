@@ -185,7 +185,7 @@ class AuthService {
         SupabaseService.reset();
         await SupabaseService.initialize();
       } catch (e) {
-        return AuthResult(error: 'Failed to connect. Please check your internet.');
+        return const AuthResult(error: 'Failed to connect. Please check your internet.');
       }
       if (_auth == null) {
         return const AuthResult(error: 'Supabase is not initialized.');
