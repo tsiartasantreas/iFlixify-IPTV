@@ -11,6 +11,8 @@
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #141414; color: #fff; min-height: 100vh; }
     .header { background: #1a1a1a; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #333; }
     .logo { font-size: 24px; font-weight: 800; color: #E50914; }
+    .header-right { display: flex; align-items: center; gap: 16px; }
+    .header-right span { color: #999; font-size: 14px; }
     .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
     .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 32px; }
     .stat-card { background: #1a1a1a; border-radius: 8px; padding: 20px; border: 1px solid #333; }
@@ -26,6 +28,10 @@
     .badge-pro { background: #E50914; color: #fff; }
     .badge-free { background: #333; color: #999; }
     .badge-admin { background: #FFD700; color: #000; }
+    .badge-active { background: #28a745; color: #fff; }
+    .badge-revoked { background: #dc3545; color: #fff; }
+    .badge-enabled { background: #28a745; color: #fff; }
+    .badge-disabled { background: #666; color: #fff; }
     .btn { padding: 8px 16px; border-radius: 4px; font-size: 14px; font-weight: 500; cursor: pointer; border: none; transition: all 0.2s; }
     .btn-primary { background: #E50914; color: #fff; }
     .btn-primary:hover { background: #C40812; }
@@ -33,7 +39,10 @@
     .btn-secondary:hover { background: #444; }
     .btn-danger { background: #dc3545; color: #fff; }
     .btn-danger:hover { background: #c82333; }
-    .actions { display: flex; gap: 8px; }
+    .btn-success { background: #28a745; color: #fff; }
+    .btn-success:hover { background: #218838; }
+    .btn-sm { padding: 4px 10px; font-size: 12px; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
     .search-bar { display: flex; gap: 12px; margin-bottom: 24px; }
     .search-bar input, .search-bar select { padding: 10px 16px; background: #222; border: 1px solid #444; border-radius: 6px; color: #fff; font-size: 14px; }
     .search-bar input { flex: 1; }
@@ -48,28 +57,61 @@
     .form-group input, .form-group select { width: 100%; padding: 10px 16px; background: #222; border: 1px solid #444; border-radius: 6px; color: #fff; font-size: 14px; }
     .back-link { display: inline-flex; align-items: center; gap: 8px; color: #999; text-decoration: none; margin-bottom: 24px; font-size: 14px; }
     .back-link:hover { color: #fff; }
+
+    /* Tab Navigation */
+    .tabs { display: flex; gap: 4px; margin-bottom: 24px; border-bottom: 2px solid #333; padding-bottom: 0; overflow-x: auto; }
+    .tab { padding: 12px 20px; font-size: 14px; font-weight: 500; color: #999; cursor: pointer; border: none; background: none; border-bottom: 3px solid transparent; margin-bottom: -2px; transition: all 0.2s; white-space: nowrap; }
+    .tab:hover { color: #fff; }
+    .tab.active { color: #E50914; border-bottom-color: #E50914; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* Toggle Switch */
+    .toggle { position: relative; display: inline-block; width: 44px; height: 24px; }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background: #555; border-radius: 24px; transition: 0.3s; }
+    .toggle-slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: 0.3s; }
+    .toggle input:checked + .toggle-slider { background: #28a745; }
+    .toggle input:checked + .toggle-slider:before { transform: translateX(20px); }
+
+    /* Rate limit */
+    .rate-limit-msg { color: #FFD700; font-size: 13px; margin-top: 8px; }
+
+    /* Download banner */
+    .download-banner { background: linear-gradient(135deg, #1a1a1a 0%, #2a1a1a 100%); border: 1px solid #E50914; border-radius: 8px; padding: 20px 24px; margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+    .download-banner p { color: #ccc; font-size: 14px; }
+    .download-banner .btn { white-space: nowrap; }
+
+    @media (max-width: 768px) {
+      .tabs { gap: 0; }
+      .tab { padding: 10px 12px; font-size: 13px; }
+      .download-banner { flex-direction: column; text-align: center; }
+    }
   </style>
 </head>
 <body>
   <header class="header">
     <div class="logo">iFlixify Admin</div>
-    <div>
-      <span id="adminEmail" style="color: #999; font-size: 14px;"></span>
-      <button onclick="logout()" style="margin-left: 16px; background: none; border: none; color: #E50914; cursor: pointer; font-size: 14px;">Logout</button>
+    <div class="header-right">
+      <span id="adminEmail"></span>
+      <button onclick="logout()" style="background: none; border: none; color: #E50914; cursor: pointer; font-size: 14px;">Logout</button>
     </div>
   </header>
 
   <div class="container">
-    <a href="/" class="back-link">← Back to Home</a>
-    
+    <a href="/" class="back-link">&larr; Back to Home</a>
+
+    <!-- Login Form -->
     <div id="loginForm" style="max-width: 400px; margin: 80px auto; text-align: center;">
       <h2 style="margin-bottom: 24px;">Admin Login</h2>
       <input type="email" id="loginEmail" placeholder="Email" style="width: 100%; padding: 12px; background: #222; border: 1px solid #444; border-radius: 6px; color: #fff; margin-bottom: 12px; font-size: 14px;">
-      <input type="password" id="loginPassword" placeholder="Password" style="width: 100%; padding: 12px; background: #222; border: 1px solid #444; border-radius: 6px; color: #fff; font-size: 14px;">
-      <button onclick="login()" class="btn btn-primary" style="width: 100%; padding: 12px; margin-top: 16px;">Sign In</button>
+      <input type="password" id="loginPassword" placeholder="Password" style="width: 100%; padding: 12px; background: #222; border: 1px solid #444; border-radius: 6px; color: #fff; font-size: 14px;" onkeydown="if(event.key==='Enter')login()">
+      <button onclick="login()" id="loginBtn" class="btn btn-primary" style="width: 100%; padding: 12px; margin-top: 16px;">Sign In</button>
       <div id="loginError" class="error" style="display: none; margin-top: 16px;"></div>
+      <div id="rateLimitMsg" class="rate-limit-msg" style="display: none;"></div>
     </div>
 
+    <!-- Access Denied -->
     <div id="accessDenied" style="display: none; max-width: 420px; margin: 80px auto; text-align: center;">
       <h2 style="margin-bottom: 16px;">Access Denied</h2>
       <p style="color: #dc3545; font-size: 16px; margin-bottom: 24px;">Access denied. Admin privileges required.</p>
@@ -77,32 +119,118 @@
       <p style="margin-top: 16px;"><a href="/profile.html" style="color: #999; font-size: 14px;">Go to your profile</a></p>
     </div>
 
+    <!-- Admin Panel -->
     <div id="adminPanel" style="display: none;">
-      <div class="stats-grid">
-        <div class="stat-card"><div class="stat-value" id="totalUsers">-</div><div class="stat-label">Total Users</div></div>
-        <div class="stat-card"><div class="stat-value" id="proUsers">-</div><div class="stat-label">Pro Users</div></div>
-        <div class="stat-card"><div class="stat-value" id="freeUsers">-</div><div class="stat-label">Free Users</div></div>
-        <div class="stat-card"><div class="stat-value" id="adminUsers">-</div><div class="stat-label">Admins</div></div>
+
+      <!-- Download Banner -->
+      <div class="download-banner">
+        <div>
+          <strong style="font-size: 16px;">Latest Release</strong>
+          <p>Download the newest version of iFlixify for Android.</p>
+        </div>
+        <a href="https://github.com/tsiartasantreas/iFlixify-IPTV/releases/latest" target="_blank" class="btn btn-primary">Download Latest Release</a>
       </div>
 
-      <div class="section">
-        <h2>User Management</h2>
-        <div class="search-bar">
-          <input type="text" id="searchInput" placeholder="Search users by email or name..." oninput="filterUsers()">
-          <select id="tierFilter" onchange="filterUsers()">
-            <option value="">All Tiers</option>
-            <option value="free">Free</option>
-            <option value="pro">Pro</option>
-          </select>
-        </div>
-        <table>
-          <thead><tr><th>Email</th><th>Name</th><th>Tier</th><th>Created</th><th>Actions</th></tr></thead>
-          <tbody id="usersTable"><tr><td colspan="5" class="loading">Loading users...</td></tr></tbody>
-        </table>
+      <!-- Tab Navigation -->
+      <div class="tabs">
+        <button class="tab active" onclick="switchTab('dashboard')">Dashboard</button>
+        <button class="tab" onclick="switchTab('users')">Users</button>
+        <button class="tab" onclick="switchTab('devices')">Devices</button>
+        <button class="tab" onclick="switchTab('subscriptions')">Subscriptions</button>
+        <button class="tab" onclick="switchTab('featureFlags')">Feature Flags</button>
+        <button class="tab" onclick="switchTab('auditLog')">Audit Log</button>
       </div>
+
+      <!-- Dashboard Tab -->
+      <div id="tab-dashboard" class="tab-content active">
+        <div class="stats-grid">
+          <div class="stat-card"><div class="stat-value" id="totalUsers">-</div><div class="stat-label">Total Users</div></div>
+          <div class="stat-card"><div class="stat-value" id="proUsers">-</div><div class="stat-label">Pro Users</div></div>
+          <div class="stat-card"><div class="stat-value" id="freeUsers">-</div><div class="stat-label">Free Users</div></div>
+          <div class="stat-card"><div class="stat-value" id="adminUsers">-</div><div class="stat-label">Admins</div></div>
+          <div class="stat-card"><div class="stat-value" id="totalDevices">-</div><div class="stat-label">Total Devices</div></div>
+          <div class="stat-card"><div class="stat-value" id="activeDevices">-</div><div class="stat-label">Active Devices</div></div>
+        </div>
+      </div>
+
+      <!-- Users Tab -->
+      <div id="tab-users" class="tab-content">
+        <div class="section">
+          <h2>User Management</h2>
+          <div class="search-bar">
+            <input type="text" id="searchInput" placeholder="Search users by email or name..." oninput="filterUsers()">
+            <select id="tierFilter" onchange="filterUsers()">
+              <option value="">All Tiers</option>
+              <option value="free">Free</option>
+              <option value="pro">Pro</option>
+            </select>
+          </div>
+          <table>
+            <thead><tr><th>Email</th><th>Name</th><th>Tier</th><th>Created</th><th>Actions</th></tr></thead>
+            <tbody id="usersTable"><tr><td colspan="5" class="loading">Loading users...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Devices Tab -->
+      <div id="tab-devices" class="tab-content">
+        <div class="section">
+          <h2>Device Management</h2>
+          <div class="search-bar">
+            <input type="text" id="deviceSearchInput" placeholder="Search by email or device name..." oninput="filterDevices()">
+          </div>
+          <table>
+            <thead><tr><th>User Email</th><th>Device Name</th><th>Fingerprint</th><th>Platform</th><th>Last Seen</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody id="devicesTable"><tr><td colspan="7" class="loading">Loading devices...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Subscriptions Tab -->
+      <div id="tab-subscriptions" class="tab-content">
+        <div class="section">
+          <h2>Subscription Management</h2>
+          <div class="search-bar">
+            <input type="text" id="subSearchInput" placeholder="Search by email..." oninput="filterSubscriptions()">
+            <select id="subTierFilter" onchange="filterSubscriptions()">
+              <option value="">All Tiers</option>
+              <option value="free">Free</option>
+              <option value="pro">Pro</option>
+            </select>
+          </div>
+          <table>
+            <thead><tr><th>Email</th><th>Tier</th><th>Start Date</th><th>Source</th><th>Actions</th></tr></thead>
+            <tbody id="subscriptionsTable"><tr><td colspan="5" class="loading">Loading subscriptions...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Feature Flags Tab -->
+      <div id="tab-featureFlags" class="tab-content">
+        <div class="section">
+          <h2>Feature Flags</h2>
+          <table>
+            <thead><tr><th>Flag Key</th><th>Value</th><th>Audience</th><th>Enabled</th><th>Actions</th></tr></thead>
+            <tbody id="featureFlagsTable"><tr><td colspan="5" class="loading">Loading feature flags...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Audit Log Tab -->
+      <div id="tab-auditLog" class="tab-content">
+        <div class="section">
+          <h2>Audit Log</h2>
+          <table>
+            <thead><tr><th>Admin</th><th>Action</th><th>Target</th><th>Timestamp</th></tr></thead>
+            <tbody id="auditLogTable"><tr><td colspan="4" class="loading">Loading audit log...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
     </div>
   </div>
 
+  <!-- Edit User Modal -->
   <div class="modal" id="editModal">
     <div class="modal-content">
       <h3 style="margin-bottom: 16px;">Edit User</h3>
@@ -120,16 +248,100 @@
 
   <script src="https://unpkg.com/@supabase/supabase-js@2.112.3"></script>
   <script>
-    // NOTE: the CDN bundle declares a global `supabase` (var), so we must NOT
-    // redeclare that name here. Our client instance is named `sb`.
     const supabaseUrl = "https://zosckkklctvrsjqjmyiv.supabase.co";
     const supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inpvc2Nra2tsY3R2cnNqcWpteWl2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYyODA2NDAsImV4cCI6MjEwMTg1NjY0MH0.bVAxexYv9e7Jo8PLRwYVyzLi6L9PFvxE3M8ZIheMmmA";
     const sb = window.supabase.createClient(supabaseUrl, supabaseAnonKey);
     let currentUser = null;
     let users = [];
+    let devices = [];
+    let featureFlags = [];
 
-    // Only admins may see this panel. A missing profile row, a row without
-    // is_admin, or any query error all resolve to "not an admin".
+    // ============================================================
+    // Rate Limiting (client-side, sessionStorage)
+    // ============================================================
+    const RATE_LIMIT_KEY = 'admin_login_attempts';
+    const MAX_ATTEMPTS = 5;
+    const LOCKOUT_MS = 60000; // 1 minute
+
+    function getLoginState() {
+      try {
+        const raw = sessionStorage.getItem(RATE_LIMIT_KEY);
+        if (!raw) return { attempts: 0, lockoutUntil: 0 };
+        return JSON.parse(raw);
+      } catch { return { attempts: 0, lockoutUntil: 0 }; }
+    }
+
+    function saveLoginState(state) {
+      sessionStorage.setItem(RATE_LIMIT_KEY, JSON.stringify(state));
+    }
+
+    function checkRateLimit() {
+      const state = getLoginState();
+      const now = Date.now();
+      if (state.lockoutUntil && now < state.lockoutUntil) {
+        const remaining = Math.ceil((state.lockoutUntil - now) / 1000);
+        showRateLimitMsg('Too many attempts. Try again in ' + remaining + 's.');
+        return false;
+      }
+      // Reset if lockout expired
+      if (state.lockoutUntil && now >= state.lockoutUntil) {
+        saveLoginState({ attempts: 0, lockoutUntil: 0 });
+        hideRateLimitMsg();
+      }
+      return true;
+    }
+
+    function recordLoginAttempt(success) {
+      const state = getLoginState();
+      if (success) {
+        saveLoginState({ attempts: 0, lockoutUntil: 0 });
+        hideRateLimitMsg();
+        return;
+      }
+      const newAttempts = state.attempts + 1;
+      if (newAttempts >= MAX_ATTEMPTS) {
+        const lockoutUntil = Date.now() + LOCKOUT_MS;
+        saveLoginState({ attempts: newAttempts, lockoutUntil });
+        startCountdown(lockoutUntil);
+      } else {
+        saveLoginState({ attempts: newAttempts, lockoutUntil: 0 });
+        showRateLimitMsg('Failed attempt ' + newAttempts + '/' + MAX_ATTEMPTS + '.');
+      }
+    }
+
+    function showRateLimitMsg(msg) {
+      const el = document.getElementById('rateLimitMsg');
+      el.textContent = msg;
+      el.style.display = 'block';
+    }
+
+    function hideRateLimitMsg() {
+      document.getElementById('rateLimitMsg').style.display = 'none';
+    }
+
+    function startCountdown(lockoutUntil) {
+      const btn = document.getElementById('loginBtn');
+      btn.disabled = true;
+      function tick() {
+        const now = Date.now();
+        if (now >= lockoutUntil) {
+          btn.disabled = false;
+          btn.textContent = 'Sign In';
+          hideRateLimitMsg();
+          saveLoginState({ attempts: 0, lockoutUntil: 0 });
+          return;
+        }
+        const remaining = Math.ceil((lockoutUntil - now) / 1000);
+        btn.textContent = 'Locked (' + remaining + 's)';
+        showRateLimitMsg('Too many attempts. Try again in ' + remaining + 's.');
+        setTimeout(tick, 1000);
+      }
+      tick();
+    }
+
+    // ============================================================
+    // Admin Verification
+    // ============================================================
     async function verifyAdmin() {
       if (!currentUser) return false;
       try {
@@ -139,15 +351,35 @@
       } catch (e) { return false; }
     }
 
+    // ============================================================
+    // Audit Logging
+    // ============================================================
+    async function logAdminAction(action, target) {
+      if (!currentUser) return;
+      try {
+        await sb.from('admin_audit_log').insert({
+          admin_id: currentUser.id,
+          admin_email: currentUser.email,
+          action: action,
+          target: target || null,
+          created_at: new Date().toISOString()
+        });
+      } catch (e) { console.warn('Audit log failed:', e); }
+    }
+
+    // ============================================================
+    // Auth
+    // ============================================================
     async function checkAuth() {
       const { data: { session } } = await sb.auth.getSession();
       if (session) {
         currentUser = session.user;
-        if (await verifyAdmin()) { showAdmin(); loadUsers(); } else { showDenied(); }
+        if (await verifyAdmin()) { showAdmin(); loadAllData(); } else { showDenied(); }
       }
     }
 
     async function login() {
+      if (!checkRateLimit()) return;
       const email = document.getElementById('loginEmail').value.trim();
       const password = document.getElementById('loginPassword').value;
       const errorDiv = document.getElementById('loginError');
@@ -156,9 +388,14 @@
         const { data, error } = await sb.auth.signInWithPassword({ email, password });
         if (error) throw error;
         currentUser = data.user;
-        if (await verifyAdmin()) { showAdmin(); loadUsers(); } else { showDenied(); }
+        recordLoginAttempt(true);
+        if (await verifyAdmin()) { showAdmin(); loadAllData(); } else { showDenied(); }
         errorDiv.style.display = 'none';
-      } catch (error) { errorDiv.textContent = error.message; errorDiv.style.display = 'block'; }
+      } catch (error) {
+        recordLoginAttempt(false);
+        errorDiv.textContent = error.message;
+        errorDiv.style.display = 'block';
+      }
     }
 
     function showAdmin() {
@@ -179,11 +416,41 @@
       await sb.auth.signOut();
       currentUser = null;
       users = [];
+      devices = [];
+      featureFlags = [];
       document.getElementById('adminPanel').style.display = 'none';
       document.getElementById('accessDenied').style.display = 'none';
       document.getElementById('loginForm').style.display = 'block';
     }
 
+    // ============================================================
+    // Tab Navigation
+    // ============================================================
+    function switchTab(tabName) {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+      event.target.classList.add('active');
+      document.getElementById('tab-' + tabName).classList.add('active');
+
+      // Lazy-load data for tabs
+      if (tabName === 'devices' && devices.length === 0) loadDevices();
+      if (tabName === 'subscriptions') loadSubscriptions();
+      if (tabName === 'featureFlags' && featureFlags.length === 0) loadFeatureFlags();
+      if (tabName === 'auditLog') loadAuditLog();
+    }
+
+    // ============================================================
+    // Load All Data
+    // ============================================================
+    async function loadAllData() {
+      await loadUsers();
+      loadDevices();
+      loadFeatureFlags();
+    }
+
+    // ============================================================
+    // Users
+    // ============================================================
     async function loadUsers() {
       try {
         const { data, error } = await sb.from('profiles').select('*').order('created_at', { ascending: false });
@@ -201,6 +468,8 @@
       document.getElementById('proUsers').textContent = users.filter(u => u.tier === 'pro').length;
       document.getElementById('freeUsers').textContent = users.filter(u => u.tier === 'free').length;
       document.getElementById('adminUsers').textContent = users.filter(u => u.is_admin).length;
+      document.getElementById('totalDevices').textContent = devices.length;
+      document.getElementById('activeDevices').textContent = devices.filter(d => d.status === 'active').length;
     }
 
     function renderUsers(usersToRender) {
@@ -210,7 +479,7 @@
         const tierBadge = user.is_admin ? 'badge-admin' : (user.tier === 'pro' ? 'badge-pro' : 'badge-free');
         const tierLabel = user.is_admin ? 'Admin' : (user.tier === 'pro' ? 'Pro' : 'Free');
         const created = new Date(user.created_at).toLocaleDateString();
-        return '<tr><td>' + (user.email || '-') + '</td><td>' + (user.display_name || '-') + '</td><td><span class="badge ' + tierBadge + '">' + tierLabel + '</span></td><td>' + created + '</td><td class="actions"><button onclick="editUser(\'' + user.id + '\')" class="btn btn-secondary">Edit</button><button onclick="deleteUser(\'' + user.id + '\',\'' + (user.email || '') + '\')" class="btn btn-danger">Delete</button></td></tr>';
+        return '<tr><td>' + esc(user.email || '-') + '</td><td>' + esc(user.display_name || '-') + '</td><td><span class="badge ' + tierBadge + '">' + tierLabel + '</span></td><td>' + created + '</td><td class="actions"><button onclick="editUser(\'' + user.id + '\')" class="btn btn-secondary btn-sm">Edit</button><button onclick="deleteUser(\'' + user.id + '\',\'' + esc(user.email || '') + '\')" class="btn btn-danger btn-sm">Delete</button></td></tr>';
       }).join('');
     }
 
@@ -237,6 +506,7 @@
     function closeModal() { document.getElementById('editModal').classList.remove('active'); }
 
     async function saveUser() {
+      if (!await verifyAdmin()) { alert('Admin verification failed. Please re-login.'); return; }
       const userId = document.getElementById('editUserId').value;
       const name = document.getElementById('editName').value;
       const tier = document.getElementById('editTier').value;
@@ -244,19 +514,206 @@
       try {
         const { error } = await sb.from('profiles').update({ display_name: name, tier: tier, is_admin: isAdmin }).eq('id', userId);
         if (error) throw error;
+        await logAdminAction('edit_user', userId);
         closeModal();
         loadUsers();
       } catch (error) { alert('Error: ' + error.message); }
     }
 
     async function deleteUser(userId, email) {
+      if (!await verifyAdmin()) { alert('Admin verification failed. Please re-login.'); return; }
       if (!confirm('Delete user ' + email + '? This cannot be undone.')) return;
       try {
         const { error } = await sb.from('profiles').delete().eq('id', userId);
         if (error) throw error;
+        await logAdminAction('delete_user', userId);
         loadUsers();
       } catch (error) { alert('Error: ' + error.message); }
     }
+
+    // ============================================================
+    // Devices
+    // ============================================================
+    async function loadDevices() {
+      try {
+        const { data, error } = await sb.from('devices').select('*, profiles(email)').order('last_seen', { ascending: false });
+        if (error) throw error;
+        devices = data || [];
+        updateStats();
+        renderDevices(devices);
+      } catch (error) {
+        document.getElementById('devicesTable').innerHTML = '<tr><td colspan="7" class="error">Error: ' + error.message + '</td></tr>';
+      }
+    }
+
+    function renderDevices(devicesToRender) {
+      const tbody = document.getElementById('devicesTable');
+      if (devicesToRender.length === 0) { tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: #999;">No devices found</td></tr>'; return; }
+      tbody.innerHTML = devicesToRender.map(d => {
+        const email = d.profiles ? d.profiles.email : '-';
+        const statusBadge = d.status === 'active' ? 'badge-active' : 'badge-revoked';
+        const lastSeen = d.last_seen ? new Date(d.last_seen).toLocaleString() : '-';
+        return '<tr><td>' + esc(email) + '</td><td>' + esc(d.device_name || '-') + '</td><td style="font-family:monospace;font-size:12px;">' + esc(d.fingerprint || '-') + '</td><td>' + esc(d.platform || '-') + '</td><td>' + lastSeen + '</td><td><span class="badge ' + statusBadge + '">' + esc(d.status || 'active') + '</span></td><td class="actions">' + (d.status === 'active' ? '<button onclick="revokeDevice(\'' + d.id + '\')" class="btn btn-danger btn-sm">Revoke</button>' : '<span style="color:#666;">Revoked</span>') + '</td></tr>';
+      }).join('');
+    }
+
+    function filterDevices() {
+      const search = document.getElementById('deviceSearchInput').value.toLowerCase();
+      let filtered = devices;
+      if (search) filtered = filtered.filter(d => {
+        const email = d.profiles ? d.profiles.email : '';
+        return (email && email.toLowerCase().includes(search)) || (d.device_name && d.device_name.toLowerCase().includes(search));
+      });
+      renderDevices(filtered);
+    }
+
+    async function revokeDevice(deviceId) {
+      if (!await verifyAdmin()) { alert('Admin verification failed. Please re-login.'); return; }
+      if (!confirm('Revoke this device? The user will need to re-authenticate on it.')) return;
+      try {
+        const { error } = await sb.from('devices').update({ status: 'revoked' }).eq('id', deviceId);
+        if (error) throw error;
+        await logAdminAction('revoke_device', deviceId);
+        loadDevices();
+      } catch (error) { alert('Error: ' + error.message); }
+    }
+
+    // ============================================================
+    // Subscriptions
+    // ============================================================
+    async function loadSubscriptions() {
+      try {
+        const { data, error } = await sb.from('profiles').select('id, email, tier, subscription_start, subscription_source').order('created_at', { ascending: false });
+        if (error) throw error;
+        renderSubscriptions(data || []);
+      } catch (error) {
+        document.getElementById('subscriptionsTable').innerHTML = '<tr><td colspan="5" class="error">Error: ' + error.message + '</td></tr>';
+      }
+    }
+
+    function renderSubscriptions(subs) {
+      const tbody = document.getElementById('subscriptionsTable');
+      if (subs.length === 0) { tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #999;">No subscriptions found</td></tr>'; return; }
+      tbody.innerHTML = subs.map(u => {
+        const tierBadge = u.tier === 'pro' ? 'badge-pro' : 'badge-free';
+        const startDate = u.subscription_start ? new Date(u.subscription_start).toLocaleDateString() : '-';
+        const source = u.subscription_source || 'manual';
+        const actions = u.tier === 'pro'
+          ? '<button onclick="revokePro(\'' + u.id + '\',\'' + esc(u.email || '') + '\')" class="btn btn-danger btn-sm">Revoke Pro</button>'
+          : '<button onclick="grantPro(\'' + u.id + '\',\'' + esc(u.email || '') + '\')" class="btn btn-success btn-sm">Grant Pro</button>';
+        return '<tr><td>' + esc(u.email || '-') + '</td><td><span class="badge ' + tierBadge + '">' + esc(u.tier || 'free') + '</span></td><td>' + startDate + '</td><td>' + esc(source) + '</td><td class="actions">' + actions + '</td></tr>';
+      }).join('');
+    }
+
+    function filterSubscriptions() {
+      const search = document.getElementById('subSearchInput').value.toLowerCase();
+      const tier = document.getElementById('subTierFilter').value;
+      // Re-fetch and filter client-side from users array
+      let filtered = users;
+      if (search) filtered = filtered.filter(u => u.email && u.email.toLowerCase().includes(search));
+      if (tier) filtered = filtered.filter(u => u.tier === tier);
+      renderSubscriptions(filtered);
+    }
+
+    async function grantPro(userId, email) {
+      if (!await verifyAdmin()) { alert('Admin verification failed. Please re-login.'); return; }
+      if (!confirm('Grant Pro tier to ' + email + '?')) return;
+      try {
+        const { error } = await sb.from('profiles').update({ tier: 'pro', subscription_start: new Date().toISOString(), subscription_source: 'manual' }).eq('id', userId);
+        if (error) throw error;
+        await logAdminAction('grant_pro', userId);
+        loadUsers();
+        loadSubscriptions();
+      } catch (error) { alert('Error: ' + error.message); }
+    }
+
+    async function revokePro(userId, email) {
+      if (!await verifyAdmin()) { alert('Admin verification failed. Please re-login.'); return; }
+      if (!confirm('Revoke Pro tier from ' + email + '? They will be downgraded to Free.')) return;
+      try {
+        const { error } = await sb.from('profiles').update({ tier: 'free' }).eq('id', userId);
+        if (error) throw error;
+        await logAdminAction('revoke_pro', userId);
+        loadUsers();
+        loadSubscriptions();
+      } catch (error) { alert('Error: ' + error.message); }
+    }
+
+    // ============================================================
+    // Feature Flags
+    // ============================================================
+    async function loadFeatureFlags() {
+      try {
+        const { data, error } = await sb.from('feature_flags').select('*').order('key');
+        if (error) throw error;
+        featureFlags = data || [];
+        renderFeatureFlags(featureFlags);
+      } catch (error) {
+        document.getElementById('featureFlagsTable').innerHTML = '<tr><td colspan="5" class="error">Error: ' + error.message + '</td></tr>';
+      }
+    }
+
+    function renderFeatureFlags(flags) {
+      const tbody = document.getElementById('featureFlagsTable');
+      if (flags.length === 0) { tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #999;">No feature flags found</td></tr>'; return; }
+      tbody.innerHTML = flags.map(f => {
+        const enabled = f.enabled !== false && f.value === true;
+        return '<tr><td style="font-family:monospace;">' + esc(f.key) + '</td><td>' + esc(String(f.value)) + '</td><td>' + esc(f.audience || 'all') + '</td><td><label class="toggle"><input type="checkbox" ' + (enabled ? 'checked' : '') + ' onchange="toggleFeatureFlag(\'' + esc(f.key) + '\', this.checked)"><span class="toggle-slider"></span></label></td><td><span class="badge ' + (enabled ? 'badge-enabled' : 'badge-disabled') + '">' + (enabled ? 'ON' : 'OFF') + '</span></td></tr>';
+      }).join('');
+    }
+
+    async function toggleFeatureFlag(key, enabled) {
+      if (!await verifyAdmin()) { alert('Admin verification failed. Please re-login.'); return; }
+      try {
+        const { error } = await sb.from('feature_flags').update({ value: enabled }).eq('key', key);
+        if (error) throw error;
+        await logAdminAction('toggle_flag_' + (enabled ? 'on' : 'off'), key);
+        loadFeatureFlags();
+      } catch (error) { alert('Error: ' + error.message); }
+    }
+
+    // ============================================================
+    // Audit Log
+    // ============================================================
+    async function loadAuditLog() {
+      try {
+        const { data, error } = await sb.from('admin_audit_log').select('*').order('created_at', { ascending: false }).limit(200);
+        if (error) throw error;
+        renderAuditLog(data || []);
+      } catch (error) {
+        document.getElementById('auditLogTable').innerHTML = '<tr><td colspan="4" class="error">Error: ' + error.message + '</td></tr>';
+      }
+    }
+
+    function renderAuditLog(logs) {
+      const tbody = document.getElementById('auditLogTable');
+      if (logs.length === 0) { tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: #999;">No audit log entries</td></tr>'; return; }
+      tbody.innerHTML = logs.map(l => {
+        const ts = l.created_at ? new Date(l.created_at).toLocaleString() : '-';
+        return '<tr><td>' + esc(l.admin_email || l.admin_id || '-') + '</td><td><span class="badge badge-pro">' + esc(l.action) + '</span></td><td style="font-family:monospace;font-size:12px;">' + esc(l.target || '-') + '</td><td>' + ts + '</td></tr>';
+      }).join('');
+    }
+
+    // ============================================================
+    // Utilities
+    // ============================================================
+    function esc(str) {
+      if (!str) return '';
+      const d = document.createElement('div');
+      d.textContent = str;
+      return d.innerHTML;
+    }
+
+    // ============================================================
+    // Init
+    // ============================================================
+    // Check if lockout is still active on page load
+    (function initRateLimit() {
+      const state = getLoginState();
+      if (state.lockoutUntil && Date.now() < state.lockoutUntil) {
+        startCountdown(state.lockoutUntil);
+      }
+    })();
 
     checkAuth();
   </script>
