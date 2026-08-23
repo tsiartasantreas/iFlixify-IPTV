@@ -74,6 +74,12 @@ dependencies:
   # share_plus — share files and text via platform share sheet.
   share_plus: ^10.1.4
 
+  # Sentry — crash reporting and performance monitoring.
+  sentry_flutter: ^8.10.0
+
+  # in_app_purchase — Google Play Billing for Pro upgrade.
+  in_app_purchase: ^3.2.0
+
 
 dev_dependencies:
   flutter_test:
@@ -85,6 +91,10 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+
+  # App icon and splash screen generation.
+  flutter_launcher_icons: ^0.14.0
+  flutter_native_splash: ^2.4.0
 
   # Drift code generation.
   drift_dev: ^2.22.0
@@ -133,3 +143,12 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+flutter_native_splash:
+  color: "#141414"
+  image: "assets/icon/splash_logo.png"
+  android: true
+  ios: false
+  android_12:
+    color: "#141414"
+    image: "assets/icon/splash_logo.png"

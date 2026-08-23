@@ -260,7 +260,7 @@ class _PinSetDialogState extends State<_PinSetDialog> {
             'Content rated 18+ or containing "XXX" will be hidden '
             'until the PIN is entered.',
             style:
-                const TextStyle(color: AppColors.textSecondary, fontSize: 14),
+                TextStyle(color: AppColors.textSecondary, fontSize: 14),
           ),
           const SizedBox(height: 16),
           // -- New PIN --

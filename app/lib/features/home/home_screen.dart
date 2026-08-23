@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:drift/drift.dart' show OrderingTerm;
 import 'package:flutter/material.dart';
 
+import '../../core/auth/profile_manager.dart';
 import '../../core/data/database.dart';
 import '../../core/data/favorites_service.dart';
 import '../../core/data/import_progress_service.dart';
@@ -16,6 +17,7 @@ import '../browse/browse_screen.dart';
 import '../detail/detail_screen.dart';
 import '../favorites/favorites_screen.dart';
 import '../import/import_screen.dart';
+import '../profiles/profile_switcher_screen.dart';
 import '../search/search_screen.dart';
 import '../settings/settings_screen.dart';
 import 'widgets/content_row.dart';
@@ -59,6 +61,7 @@ class HomeScreenState extends State<HomeScreen> {
   bool _isEmpty = true;
   bool _isLoading = true;
   bool _parentalLocked = false;
+  String _activeProfileInitials = 'U';
 
   /// Tracks the last seen tab-change notifier value so we only reload when
   /// the tab actually changes (not on the initial build).
@@ -134,6 +137,20 @@ class HomeScreenState extends State<HomeScreen> {
   // Data loading
   // ---------------------------------------------------------------------------
 
+  Future<void> _loadActiveProfileInitials() async {
+    try {
+      final profileManager = ProfileManager();
+      final active = await profileManager.getActiveProfile();
+      if (active != null && mounted) {
+        final name = active.displayName.trim();
+        final initials = name.isNotEmpty
+            ? name.split(RegExp(r'\s+')).map((w) => w[0]).take(2).join().toUpperCase()
+            : 'U';
+        setState(() => _activeProfileInitials = initials);
+      }
+    } catch (_) {}
+  }
+
   Future<void> _loadFavorites() async {
     try {
       final favs = await _favoritesService.getFavorites();
@@ -142,6 +159,9 @@ class HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _loadContent() async {
+    // Load active profile initials for the AppBar avatar.
+    _loadActiveProfileInitials();
+
     // Load favorites in parallel.
     _loadFavorites();
 
@@ -967,6 +987,24 @@ class HomeScreenState extends State<HomeScreen> {
             },
             tooltip: 'Settings',
           ),
+          GestureDetector(
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const ProfileSwitcherScreen()),
+            ),
+            child: CircleAvatar(
+              radius: 16,
+              backgroundColor: AppColors.accentPrimary,
+              child: Text(
+                _activeProfileInitials,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
         ],
       ),
       body: Column(

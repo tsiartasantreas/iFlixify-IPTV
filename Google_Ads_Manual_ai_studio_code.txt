@@ -1,0 +1,32 @@
+# Google AdMob Integration Specification & Implementation Manual
+
+## 1. Objective & Scope
+This document serves as the complete technical specification for integrating Google Mobile Ads (AdMob) into the Android application. 
+
+Follow all architectural constraints, lifecycle requirements, and compliance rules precisely. Avoid hardcoding production IDs into debug environments and enforce privacy consent (Google UMP SDK) before requesting ads.
+
+---
+
+## 2. Non-Negotiable Rules & Policy Constraints
+
+1. **Test Ads in Development:** Never request live production ads during development or automated testing. Use Google-provided test unit IDs in debug builds.
+2. **Consent-First Initialization:** The Google Mobile Ads (GMA) SDK must **not** load personalized/non-personalized ads until the Google User Messaging Platform (UMP) SDK has gathered and validated user consent (GDPR / Privacy compliance).
+3. **No Accidental Clicks:** Banner ads must not overlap with clickable UI components, navigation bars, or inputs.
+4. **Natural Transition Interstitials:** Interstitial ads must be displayed only during natural breakpoints (e.g., level complete, screen transitions), never during active user interaction or on cold app startup.
+5. **Memory Leak Prevention:** Ad instances must not outlive the Activities/Views hosting them. Clean up or destroy views on lifecycle destruction.
+
+---
+
+## 3. Configuration & Dependency Setup
+
+### 3.1 App-Level Gradle (`build.gradle.kts` or `build.gradle`)
+Ensure Google Maven repository is accessible, then add the core dependencies:
+
+```kotlin
+dependencies {
+    // Google Mobile Ads SDK
+    implementation("com.google.android.gms:play-services-ads:23.3.0")
+
+    // Google User Messaging Platform (UMP) SDK for GDPR/Privacy
+    implementation("com.google.android.ump:user-messaging-platform:3.0.0")
+}

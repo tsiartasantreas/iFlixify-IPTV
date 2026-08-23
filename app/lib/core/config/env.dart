@@ -40,4 +40,13 @@ class Env {
   /// boot before Supabase wiring exists.
   static bool get isConfigured =>
       _supabaseUrl.isNotEmpty && _supabaseAnonKey.isNotEmpty;
+
+  // Sentry DSN for crash reporting. Replace with your actual DSN from sentry.io
+  static const String _sentryDsn = String.fromEnvironment(
+    'SENTRY_DSN',
+    defaultValue: '', // Empty = disabled
+  );
+
+  static String get sentryDsn => _sentryDsn;
+  static bool get isSentryConfigured => _sentryDsn.isNotEmpty;
 }

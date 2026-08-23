@@ -11,6 +11,8 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <!-- Required on Android 14+ to post download-progress notifications. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- Google Play Billing for Pro upgrade. -->
+    <uses-permission android:name="com.android.vending.BILLING"/>
 
     <application
         android:label="iFlixify IPTV"

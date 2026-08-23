@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/entitlement/entitlement_service.dart';
+import '../../core/purchase/purchase_service.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_theme.dart';
 
@@ -9,10 +9,9 @@ import '../../core/theme/app_theme.dart';
 ///
 /// Shows the current tier status, the Pro benefits from the feature matrix
 /// (unlimited playlists, multi-user profiles, Continue Watching, cross-device
-/// sync), and the one-time lifetime price. The "Upgrade" action opens the
-/// website where the purchase is completed (placeholder until the Revolut
-/// checkout exists in Phase 4); "Restore Purchase" re-fetches the tier from
-/// Supabase so a completed purchase activates immediately.
+/// sync), and the one-time lifetime price. The "Buy Pro" button initiates
+/// Google Play Billing; "Restore Purchase" re-fetches the tier from Supabase
+/// and restores any previous purchases.
 class ActivateProScreen extends StatefulWidget {
   const ActivateProScreen({super.key});
 
@@ -22,21 +21,24 @@ class ActivateProScreen extends StatefulWidget {
 
 class _ActivateProScreenState extends State<ActivateProScreen> {
   final EntitlementService _entitlement = EntitlementService();
-
-  /// Website where the Pro purchase is completed.
-  static const String _purchaseUrl = 'https://iflixify.wasmer.app';
-
-  /// One-time lifetime price shown on the screen.
-  static const String _price = '\$8.99';
+  late final PurchaseService _purchaseService;
 
   bool _isPro = false;
   bool _isAdmin = false;
   bool _isRestoring = false;
+  bool _isPurchasing = false;
 
   @override
   void initState() {
     super.initState();
+    _purchaseService = PurchaseService(entitlementService: _entitlement);
+    _initPurchase();
     _loadTier();
+  }
+
+  Future<void> _initPurchase() async {
+    await _purchaseService.initialize();
+    if (mounted) setState(() {});
   }
 
   // ---------------------------------------------------------------------------
@@ -55,25 +57,48 @@ class _ActivateProScreenState extends State<ActivateProScreen> {
   /// Pro features are unlocked for Pro subscribers and admins.
   bool get _proActive => _isPro || _isAdmin;
 
+  /// Display price from Google Play, or fallback.
+  String get _price =>
+      _purchaseService.proProduct?.price ?? '\$8.99';
+
   // ---------------------------------------------------------------------------
   // Actions
   // ---------------------------------------------------------------------------
 
-  /// Opens the website in an external browser to complete the purchase.
-  Future<void> _openCheckout() async {
-    final uri = Uri.parse(_purchaseUrl);
-    var opened = false;
-    try {
-      opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } catch (_) {
-      opened = false;
+  /// Initiates the Google Play Billing purchase flow.
+  Future<void> _buyPro() async {
+    if (_isPurchasing) return;
+
+    if (_entitlement.isAnonymous) {
+      _showSnackBar(
+        'Sign in to your account first (Settings > Account), then upgrade.',
+      );
+      return;
     }
-    if (!opened && mounted) {
-      _showSnackBar('Could not open $_purchaseUrl');
+
+    setState(() {
+      _isPurchasing = true;
+    });
+
+    await _purchaseService.buyPro();
+
+    if (!mounted) return;
+
+    // Check result
+    if (_purchaseService.purchaseError != null) {
+      _showSnackBar(_purchaseService.purchaseError!);
+    } else if (!_purchaseService.isPurchasePending) {
+      // Purchase completed successfully
+      await _loadTier();
+      if (_proActive && mounted) {
+        _showSnackBar('Pro activated -- all features unlocked!');
+      }
     }
+
+    if (mounted) setState(() => _isPurchasing = false);
   }
 
-  /// Re-fetches the tier from Supabase so a completed purchase activates.
+  /// Re-fetches the tier from Supabase and restores previous purchases.
   Future<void> _restorePurchase() async {
     if (_isRestoring) return;
 
@@ -86,6 +111,9 @@ class _ActivateProScreenState extends State<ActivateProScreen> {
 
     setState(() => _isRestoring = true);
     try {
+      // Restore via Google Play
+      await _purchaseService.restorePurchases();
+      // Also refresh tier from Supabase
       await _entitlement.refreshTier();
       if (!mounted) return;
       setState(() {
@@ -94,7 +122,7 @@ class _ActivateProScreenState extends State<ActivateProScreen> {
       });
       _showSnackBar(
         _proActive
-            ? 'Pro restored — all features unlocked.'
+            ? 'Pro restored -- all features unlocked.'
             : 'No Pro purchase found for this account.',
       );
     } catch (_) {
@@ -116,6 +144,12 @@ class _ActivateProScreenState extends State<ActivateProScreen> {
         duration: const Duration(seconds: 3),
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    _purchaseService.dispose();
+    super.dispose();
   }
 
   // ---------------------------------------------------------------------------
@@ -172,9 +206,24 @@ class _ActivateProScreenState extends State<ActivateProScreen> {
           SizedBox(
             height: 52,
             child: ElevatedButton.icon(
-              onPressed: _proActive ? null : _openCheckout,
-              icon: const Icon(Icons.workspace_premium, size: 22),
-              label: Text(_proActive ? 'Pro is active' : 'Upgrade for $_price'),
+              onPressed: _proActive || _isPurchasing ? null : _buyPro,
+              icon: _isPurchasing
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: AppColors.textPrimary,
+                      ),
+                    )
+                  : const Icon(Icons.workspace_premium, size: 22),
+              label: Text(
+                _proActive
+                    ? 'Pro is active'
+                    : _isPurchasing
+                        ? 'Processing...'
+                        : 'Upgrade for $_price',
+              ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.accentPrimary,
                 foregroundColor: AppColors.textPrimary,
@@ -221,8 +270,8 @@ class _ActivateProScreenState extends State<ActivateProScreen> {
 
           // -- Fine print ----------------------------------------------------
           const Text(
-            'Secure one-time payment of $_price via iflixify.wasmer.app. '
-            'Pro activates on this device automatically after purchase — '
+            'Secure one-time payment via Google Play. '
+            'Pro activates on this device automatically after purchase -- '
             'tap "Restore Purchase" if it does not.',
             textAlign: TextAlign.center,
             style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
@@ -382,7 +431,7 @@ class _ActivateProScreenState extends State<ActivateProScreen> {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: AppColors.bgSurface),
       ),
-      child: const Row(
+      child: Row(
         children: [
           Expanded(
             child: Column(
@@ -390,14 +439,14 @@ class _ActivateProScreenState extends State<ActivateProScreen> {
               children: [
                 Text(
                   _price,
-                  style: TextStyle(
+                  style: const TextStyle(
                     color: AppColors.textPrimary,
                     fontSize: 34,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
-                SizedBox(height: 2),
-                Text(
+                const SizedBox(height: 2),
+                const Text(
                   'one-time payment · lifetime access',
                   style: TextStyle(
                     color: AppColors.textSecondary,
@@ -407,7 +456,7 @@ class _ActivateProScreenState extends State<ActivateProScreen> {
               ],
             ),
           ),
-          Icon(
+          const Icon(
             Icons.workspace_premium,
             color: AppColors.accentPrimary,
             size: 40,

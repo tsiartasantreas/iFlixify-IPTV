@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:sentry_flutter/sentry_flutter.dart';
+import 'core/auth/profile_manager.dart';
+import 'core/entitlement/entitlement_service.dart';
+import 'core/purchase/purchase_service.dart';
 import 'core/theme/app_colors.dart';
 import 'core/theme/netflix_theme.dart';
+import 'features/onboarding/onboarding_screen.dart';
 import 'features/shell/main_shell.dart';
 
 /// Global route observer used by [MainShell] to detect when it becomes
@@ -23,6 +28,7 @@ class FlixiumApp extends StatefulWidget {
 
 class _FlixiumAppState extends State<FlixiumApp> {
   bool _initialized = false;
+  bool _showOnboarding = false;
 
   @override
   void initState() {
@@ -31,9 +37,22 @@ class _FlixiumAppState extends State<FlixiumApp> {
   }
 
   Future<void> _bootstrap() async {
-    // Do NOT initialize Supabase at startup. It is initialized lazily
-    // when the user signs in (auth_screen) or opens settings.
-    // This ensures the UI renders immediately on first install.
+    // Ensure a default profile exists for first-time users.
+    try {
+      final profileManager = ProfileManager();
+      await profileManager.ensureDefaultProfile();
+    } catch (_) {}
+
+    // Check if this is the first launch
+    _showOnboarding = !await OnboardingScreen.hasCompleted();
+
+    // Initialize Google Play Billing (non-blocking, best-effort).
+    try {
+      final purchaseService =
+          PurchaseService(entitlementService: EntitlementService());
+      await purchaseService.initialize();
+    } catch (_) {}
+
     if (mounted) {
       setState(() {
         _initialized = true;
@@ -56,14 +75,20 @@ class _FlixiumAppState extends State<FlixiumApp> {
       );
     }
 
-    // Always go straight to MainShell. The user can sign in/register
-    // from Settings when they want to.
-    return MaterialApp(
-      title: 'iFlixify IPTV',
-      debugShowCheckedModeBanner: false,
-      theme: NetflixTheme.dark,
-      navigatorObservers: [routeObserver],
-      home: const MainShell(),
+    return SentryWidget(
+      child: MaterialApp(
+        title: 'iFlixify IPTV',
+        debugShowCheckedModeBanner: false,
+        theme: NetflixTheme.dark,
+        navigatorObservers: [routeObserver, SentryNavigatorObserver()],
+        home: _showOnboarding
+            ? OnboardingScreen(
+                onComplete: () {
+                  setState(() => _showOnboarding = false);
+                },
+              )
+            : const MainShell(),
+      ),
     );
   }
 }

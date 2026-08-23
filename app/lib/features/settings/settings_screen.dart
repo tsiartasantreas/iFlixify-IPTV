@@ -18,6 +18,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/widgets/pin_dialog.dart';
 import '../auth/auth_screen.dart';
 import '../offline/offline_screen.dart';
+import '../profiles/profile_switcher_screen.dart';
 import 'activate_pro_screen.dart';
 
 /// Netflix-style settings screen.
@@ -375,6 +376,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
         children: [
           // -- Account Status section (top of screen) -------------------------
           _buildAccountStatusSection(),
+
+          const SizedBox(height: 16),
+
+          // -- Profile section -----------------------------------------------
+          _buildSectionHeader('Profile'),
+          _buildNavigationTile(
+            icon: Icons.switch_account,
+            title: 'Switch Profile',
+            subtitle: 'Manage user profiles',
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const ProfileSwitcherScreen()),
+              );
+            },
+          ),
 
           const SizedBox(height: 16),
 
