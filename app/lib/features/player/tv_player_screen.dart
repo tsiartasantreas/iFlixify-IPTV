@@ -9,6 +9,10 @@ import '../../core/data/database.dart';
 import '../../core/data/watch_progress_service.dart';
 import '../../core/player/player_controller.dart';
 import '../../core/theme/app_colors.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../../core/data/offline_download_service.dart';
+import '../../core/widgets/favorite_button.dart';
 import 'widgets/player_overlay_widgets.dart';
 
 /// Full-screen TV / Fire TV player with D-pad controls and advanced overlays.
@@ -33,6 +37,8 @@ class TvPlayerScreen extends StatefulWidget {
     this.onPreviousChannel,
     this.contentId,
     this.startPosition,
+    this.poster,
+    this.url,
   });
 
   final PlayerController controller;
@@ -63,6 +69,12 @@ class TvPlayerScreen extends StatefulWidget {
   /// Saved position to resume from, once the media duration is known.
   final Duration? startPosition;
 
+  /// Poster / thumbnail URL for favourites and downloads.
+  final String? poster;
+
+  /// Stream URL for downloads.
+  final String? url;
+
   @override
   State<TvPlayerScreen> createState() => _TvPlayerScreenState();
 }
@@ -90,6 +102,10 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
   /// True when watch progress should be recorded for this session.
   bool get _recordsProgress =>
       widget.contentId != null && widget.contentId!.isNotEmpty && !widget.isLive;
+
+  // -- Subtitle preferences --------------------------------------------------
+  double _subtitleFontSize = 18.0;
+  double _subtitleBgOpacity = 0.6;
 
   @override
   void initState() {
@@ -121,6 +137,9 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
         });
       }
     }
+
+    // Load subtitle preferences.
+    _loadSubtitlePrefs();
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _focusNode.requestFocus();
@@ -190,7 +209,7 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
 
     // Give up after too many attempts (e.g. an unseekable stream) and
     // simply play from the start.
-    if (_resumeAttempts >= 15) {
+    if (_resumeAttempts >= 30) {
       _resumePending = false;
       return;
     }
@@ -200,11 +219,14 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
     final now = DateTime.now();
     if (_lastResumeAttempt != null &&
         now.difference(_lastResumeAttempt!) <
-            const Duration(milliseconds: 800)) {
+            const Duration(milliseconds: 500)) {
       return;
     }
     _resumeAttempts++;
     _lastResumeAttempt = now;
+
+    // ignore: avoid_print
+    print('[TvPlayerScreen] _tryResume attempt $_resumeAttempts → seeking to ${target.inSeconds}s (current: ${ctrl.position.inSeconds}s, duration: ${ctrl.duration.inSeconds}s)');
     ctrl.seek(target);
   }
 
@@ -594,6 +616,43 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
               return const SizedBox.shrink();
             },
           ),
+          // Subtitle settings button
+          if (widget.contentId != null)
+            Padding(
+              padding: const EdgeInsets.only(left: 8),
+              child: _TvIconButton(
+                icon: Icons.closed_caption,
+                tooltip: 'Subtitle settings',
+                onPressed: _showSubtitleSettings,
+              ),
+            ),
+          // Favorite button
+          if (widget.contentId != null && widget.contentType != null)
+            Padding(
+              padding: const EdgeInsets.only(left: 8),
+              child: FavoriteButton(
+                contentId: widget.contentId!,
+                contentType: widget.contentType!,
+                title: widget.title,
+                poster: widget.poster,
+                url: widget.url,
+                size: 22,
+              ),
+            ),
+          // Download button
+          if (widget.contentId != null &&
+              widget.url != null &&
+              widget.contentType != null)
+            Padding(
+              padding: const EdgeInsets.only(left: 8),
+              child: _TvDownloadOverlayButton(
+                contentId: widget.contentId!,
+                url: widget.url!,
+                title: widget.title,
+                contentType: widget.contentType!,
+                thumbnailUrl: widget.poster,
+              ),
+            ),
         ],
       ),
     );
@@ -689,6 +748,149 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
       ),
     );
   }
+
+  // ---------------------------------------------------------------------------
+  // Subtitle settings
+  // ---------------------------------------------------------------------------
+
+  Future<void> _loadSubtitlePrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _subtitleFontSize = prefs.getDouble('subtitle_font_size') ?? 18.0;
+        _subtitleBgOpacity = prefs.getDouble('subtitle_bg_opacity') ?? 0.6;
+      });
+    }
+  }
+
+  void _showSubtitleSettings() {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: AppColors.bgSurface,
+              title: const Text(
+                'Subtitle Settings',
+                style: TextStyle(color: AppColors.textPrimary),
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Font Size: ${_subtitleFontSize.round()}px',
+                    style: const TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 14,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      _tvFontSizeButton(14, setDialogState),
+                      const SizedBox(width: 8),
+                      _tvFontSizeButton(18, setDialogState),
+                      const SizedBox(width: 8),
+                      _tvFontSizeButton(24, setDialogState),
+                      const SizedBox(width: 8),
+                      _tvFontSizeButton(32, setDialogState),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  Text(
+                    'Background Opacity: ${(_subtitleBgOpacity * 100).round()}%',
+                    style: const TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 14,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SliderTheme(
+                    data: SliderThemeData(
+                      activeTrackColor: AppColors.accentPrimary,
+                      inactiveTrackColor: AppColors.bgSurface,
+                      thumbColor: AppColors.accentPrimary,
+                      overlayColor: AppColors.accentPrimary.withValues(alpha: 0.2),
+                    ),
+                    child: Slider(
+                      value: _subtitleBgOpacity,
+                      min: 0.0,
+                      max: 1.0,
+                      divisions: 10,
+                      onChanged: (val) async {
+                        setDialogState(() => _subtitleBgOpacity = val);
+                        setState(() => _subtitleBgOpacity = val);
+                        final prefs = await SharedPreferences.getInstance();
+                        await prefs.setDouble('subtitle_bg_opacity', val);
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Styling will be applied when subtitle rendering is enabled.',
+                    style: TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 12,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  autofocus: true,
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text(
+                    'Done',
+                    style: TextStyle(color: AppColors.accentPrimary),
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _tvFontSizeButton(double size, StateSetter setDialogState) {
+    final isSelected = (_subtitleFontSize - size).abs() < 0.01;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () async {
+          setDialogState(() => _subtitleFontSize = size);
+          setState(() => _subtitleFontSize = size);
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setDouble('subtitle_font_size', size);
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          decoration: BoxDecoration(
+            color: isSelected
+                ? AppColors.accentPrimary
+                : AppColors.bgSurface,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: isSelected
+                  ? AppColors.accentPrimary
+                  : AppColors.textSecondary,
+            ),
+          ),
+          child: Text(
+            '${size.round()}',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color:
+                  isSelected ? AppColors.textPrimary : AppColors.textSecondary,
+              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// Focusable icon button for TV/D-pad navigation.
@@ -745,6 +947,81 @@ class _TvIconButton extends StatelessWidget {
           );
         },
       ),
+    );
+  }
+}
+
+/// Download button for the TV player overlay.
+///
+/// Uses [_TvIconButton] for D-pad focusability and triggers
+/// [OfflineDownloadService.enqueueDownload] on activation.
+class _TvDownloadOverlayButton extends StatefulWidget {
+  const _TvDownloadOverlayButton({
+    required this.contentId,
+    required this.url,
+    required this.title,
+    required this.contentType,
+    this.thumbnailUrl,
+  });
+
+  final String contentId;
+  final String url;
+  final String title;
+  final String contentType;
+  final String? thumbnailUrl;
+
+  @override
+  State<_TvDownloadOverlayButton> createState() =>
+      _TvDownloadOverlayButtonState();
+}
+
+class _TvDownloadOverlayButtonState extends State<_TvDownloadOverlayButton> {
+  final _service = OfflineDownloadService.instance;
+  bool _isDownloaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkDownloaded();
+  }
+
+  Future<void> _checkDownloaded() async {
+    final result = await _service.isDownloaded(widget.contentId);
+    if (mounted) setState(() => _isDownloaded = result);
+  }
+
+  void _onTap() {
+    if (_isDownloaded) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Already downloaded'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+    _service.enqueueDownload(
+      contentId: widget.contentId,
+      url: widget.url,
+      title: widget.title,
+      contentType: widget.contentType,
+      thumbnailUrl: widget.thumbnailUrl,
+    );
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Download started'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _TvIconButton(
+      icon: _isDownloaded ? Icons.download_done : Icons.download,
+      tooltip: _isDownloaded ? 'Downloaded' : 'Download',
+      color: _isDownloaded ? AppColors.accentPrimary : null,
+      onPressed: _onTap,
     );
   }
 }

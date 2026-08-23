@@ -10,6 +10,10 @@ import '../../core/data/watch_progress_service.dart';
 import '../../core/player/brightness_service.dart';
 import '../../core/player/player_controller.dart';
 import '../../core/theme/app_colors.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../../core/data/offline_download_service.dart';
+import '../../core/widgets/favorite_button.dart';
 import 'widgets/player_overlay_widgets.dart';
 
 /// Full-screen mobile video player with advanced overlay controls.
@@ -35,6 +39,8 @@ class PlayerScreen extends StatefulWidget {
     this.onPreviousChannel,
     this.contentId,
     this.startPosition,
+    this.poster,
+    this.url,
   });
 
   final PlayerController controller;
@@ -65,6 +71,12 @@ class PlayerScreen extends StatefulWidget {
   /// Saved position to resume from, once the media duration is known.
   final Duration? startPosition;
 
+  /// Poster / thumbnail URL for favourites and downloads.
+  final String? poster;
+
+  /// Stream URL for downloads.
+  final String? url;
+
   @override
   State<PlayerScreen> createState() => _PlayerScreenState();
 }
@@ -86,6 +98,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
   // Track whether the user is currently swiping (to suppress tap).
   bool _isSwiping = false;
   double _swipeStartY = 0;
+
+  // -- Double-tap seek -------------------------------------------------------
+  Timer? _singleTapTimer;
+  bool _showLeftSeekIcon = false;
+  bool _showRightSeekIcon = false;
+  Timer? _seekIconTimer;
+
+  // -- Subtitle preferences --------------------------------------------------
+  double _subtitleFontSize = 18.0;
+  double _subtitleBgOpacity = 0.6;
 
   // -- Watch progress ---------------------------------------------------------
   late final WatchProgressService _watchService;
@@ -142,6 +164,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
       if (mounted) setState(() => _brightness = b);
     });
 
+    // Load subtitle preferences.
+    _loadSubtitlePrefs();
+
     // Sync volume fraction from controller.
     _volumeFraction = widget.controller.volumeFraction;
 
@@ -154,6 +179,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void dispose() {
     _hideTimer?.cancel();
     _indicatorHideTimer?.cancel();
+    _singleTapTimer?.cancel();
+    _seekIconTimer?.cancel();
     if (_recordsProgress) {
       _progressTimer?.cancel();
       widget.controller.removeListener(_onPlayerChanged);
@@ -214,7 +241,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
     // Give up after too many attempts (e.g. an unseekable stream) and
     // simply play from the start.
-    if (_resumeAttempts >= 15) {
+    if (_resumeAttempts >= 30) {
       _resumePending = false;
       return;
     }
@@ -224,11 +251,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final now = DateTime.now();
     if (_lastResumeAttempt != null &&
         now.difference(_lastResumeAttempt!) <
-            const Duration(milliseconds: 800)) {
+            const Duration(milliseconds: 500)) {
       return;
     }
     _resumeAttempts++;
     _lastResumeAttempt = now;
+
+    // ignore: avoid_print
+    print('[PlayerScreen] _tryResume attempt $_resumeAttempts → seeking to ${target.inSeconds}s (current: ${ctrl.position.inSeconds}s, duration: ${ctrl.duration.inSeconds}s)');
     ctrl.seek(target);
   }
 
@@ -408,7 +438,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
           onKeyEvent: _onKey,
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTap: _onScreenTap,
+            onTapDown: (details) {
+              _singleTapTimer?.cancel();
+              _singleTapTimer = Timer(const Duration(milliseconds: 250), () {
+                _onScreenTap();
+              });
+            },
+            onDoubleTapDown: (details) {
+              _singleTapTimer?.cancel();
+              _onDoubleTap(details);
+            },
             onVerticalDragStart: _onVerticalDragStart,
             onVerticalDragUpdate: _onVerticalDragUpdate,
             onVerticalDragEnd: _onVerticalDragEnd,
@@ -464,6 +503,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
                 // -- Up Next overlay (series episodes) ------------------------
                 _buildUpNextOverlay(ctrl),
+
+                // -- Double-tap seek icons ------------------------------------
+                _buildSeekIconOverlay(),
 
                 // -- Overlay controls ----------------------------------------
                 IgnorePointer(
@@ -723,6 +765,35 @@ class _PlayerScreenState extends State<PlayerScreen> {
               return const SizedBox.shrink();
             },
           ),
+          // Subtitle settings button
+          if (widget.contentId != null)
+            IconButton(
+              icon: const Icon(Icons.closed_caption,
+                  color: AppColors.textPrimary),
+              tooltip: 'Subtitle settings',
+              onPressed: _showSubtitleSettings,
+            ),
+          // Favorite button
+          if (widget.contentId != null && widget.contentType != null)
+            FavoriteButton(
+              contentId: widget.contentId!,
+              contentType: widget.contentType!,
+              title: widget.title,
+              poster: widget.poster,
+              url: widget.url,
+              size: 22,
+            ),
+          // Download button
+          if (widget.contentId != null &&
+              widget.url != null &&
+              widget.contentType != null)
+            _DownloadOverlayButton(
+              contentId: widget.contentId!,
+              url: widget.url!,
+              title: widget.title,
+              contentType: widget.contentType!,
+              thumbnailUrl: widget.poster,
+            ),
         ],
       ),
     );
@@ -790,6 +861,332 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 },
         );
       },
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Double-tap seek
+  // ---------------------------------------------------------------------------
+
+  void _onDoubleTap(TapDownDetails details) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isLeft = details.localPosition.dx < screenWidth / 2;
+
+    if (isLeft) {
+      widget.controller.seekBy(const Duration(seconds: -15));
+      setState(() => _showLeftSeekIcon = true);
+    } else {
+      widget.controller.seekBy(const Duration(seconds: 15));
+      setState(() => _showRightSeekIcon = true);
+    }
+
+    _seekIconTimer?.cancel();
+    _seekIconTimer = Timer(const Duration(milliseconds: 500), () {
+      if (mounted) {
+        setState(() {
+          _showLeftSeekIcon = false;
+          _showRightSeekIcon = false;
+        });
+      }
+    });
+    _startHideTimer();
+  }
+
+  Widget _buildSeekIconOverlay() {
+    return IgnorePointer(
+      child: Stack(
+        children: [
+          // Left seek icon
+          Positioned(
+            left: 40,
+            top: 0,
+            bottom: 0,
+            child: Center(
+              child: AnimatedOpacity(
+                opacity: _showLeftSeekIcon ? 1.0 : 0.0,
+                duration: const Duration(milliseconds: 200),
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(30),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.fast_rewind, color: Colors.white, size: 28),
+                      SizedBox(width: 4),
+                      Text(
+                        '15',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          // Right seek icon
+          Positioned(
+            right: 40,
+            top: 0,
+            bottom: 0,
+            child: Center(
+              child: AnimatedOpacity(
+                opacity: _showRightSeekIcon ? 1.0 : 0.0,
+                duration: const Duration(milliseconds: 200),
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(30),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '15',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      SizedBox(width: 4),
+                      Icon(Icons.fast_forward, color: Colors.white, size: 28),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Subtitle settings
+  // ---------------------------------------------------------------------------
+
+  Future<void> _loadSubtitlePrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _subtitleFontSize = prefs.getDouble('subtitle_font_size') ?? 18.0;
+        _subtitleBgOpacity = prefs.getDouble('subtitle_bg_opacity') ?? 0.6;
+      });
+    }
+  }
+
+  void _showSubtitleSettings() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.bgSurface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Subtitle Settings',
+                    style: TextStyle(
+                      color: AppColors.textPrimary,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  // Font size
+                  Text(
+                    'Font Size: ${_subtitleFontSize.round()}px',
+                    style: const TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 14,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      _fontSizeButton(14, setModalState),
+                      const SizedBox(width: 8),
+                      _fontSizeButton(18, setModalState),
+                      const SizedBox(width: 8),
+                      _fontSizeButton(24, setModalState),
+                      const SizedBox(width: 8),
+                      _fontSizeButton(32, setModalState),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  // Background opacity
+                  Text(
+                    'Background Opacity: ${(_subtitleBgOpacity * 100).round()}%',
+                    style: const TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 14,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SliderTheme(
+                    data: SliderThemeData(
+                      activeTrackColor: AppColors.accentPrimary,
+                      inactiveTrackColor: AppColors.bgSurface,
+                      thumbColor: AppColors.accentPrimary,
+                      overlayColor: AppColors.accentPrimary.withValues(alpha: 0.2),
+                    ),
+                    child: Slider(
+                      value: _subtitleBgOpacity,
+                      min: 0.0,
+                      max: 1.0,
+                      divisions: 10,
+                      onChanged: (val) async {
+                        setModalState(() => _subtitleBgOpacity = val);
+                        setState(() => _subtitleBgOpacity = val);
+                        final prefs = await SharedPreferences.getInstance();
+                        await prefs.setDouble('subtitle_bg_opacity', val);
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Styling will be applied when subtitle rendering is enabled.',
+                    style: TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 12,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _fontSizeButton(double size, StateSetter setModalState) {
+    final isSelected = (_subtitleFontSize - size).abs() < 0.01;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () async {
+          setModalState(() => _subtitleFontSize = size);
+          setState(() => _subtitleFontSize = size);
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setDouble('subtitle_font_size', size);
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          decoration: BoxDecoration(
+            color: isSelected
+                ? AppColors.accentPrimary
+                : AppColors.bgSurface,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: isSelected
+                  ? AppColors.accentPrimary
+                  : AppColors.textSecondary,
+            ),
+          ),
+          child: Text(
+            '${size.round()}',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color:
+                  isSelected ? AppColors.textPrimary : AppColors.textSecondary,
+              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Download button for the player overlay.
+///
+/// Shows a download icon that triggers [OfflineDownloadService.enqueueDownload]
+/// and displays a SnackBar with the result.
+class _DownloadOverlayButton extends StatefulWidget {
+  const _DownloadOverlayButton({
+    required this.contentId,
+    required this.url,
+    required this.title,
+    required this.contentType,
+    this.thumbnailUrl,
+  });
+
+  final String contentId;
+  final String url;
+  final String title;
+  final String contentType;
+  final String? thumbnailUrl;
+
+  @override
+  State<_DownloadOverlayButton> createState() => _DownloadOverlayButtonState();
+}
+
+class _DownloadOverlayButtonState extends State<_DownloadOverlayButton> {
+  final _service = OfflineDownloadService.instance;
+  bool _isDownloaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkDownloaded();
+  }
+
+  Future<void> _checkDownloaded() async {
+    final result = await _service.isDownloaded(widget.contentId);
+    if (mounted) setState(() => _isDownloaded = result);
+  }
+
+  void _onTap() {
+    if (_isDownloaded) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Already downloaded'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+    _service.enqueueDownload(
+      contentId: widget.contentId,
+      url: widget.url,
+      title: widget.title,
+      contentType: widget.contentType,
+      thumbnailUrl: widget.thumbnailUrl,
+    );
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Download started'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      icon: Icon(
+        _isDownloaded ? Icons.download_done : Icons.download,
+        color: _isDownloaded ? AppColors.accentPrimary : AppColors.textPrimary,
+      ),
+      tooltip: _isDownloaded ? 'Downloaded' : 'Download',
+      onPressed: _onTap,
     );
   }
 }

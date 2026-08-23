@@ -202,7 +202,7 @@ class OfflineDownloadService {
     if (await isDownloaded(contentId)) return;
 
     final dir = await _getDownloadDirectory();
-    final safeName = _safeFilename(contentId);
+    final safeName = _safeFilename(contentId, title, url);
     final file = File('${dir.path}/$safeName');
 
     final request = http.Request('GET', Uri.parse(url));
@@ -448,7 +448,7 @@ class OfflineDownloadService {
     if (await isDownloaded(task.contentId)) return;
 
     final dir = await _getDownloadDirectory();
-    final safeName = _safeFilename(task.contentId);
+    final safeName = _safeFilename(task.contentId, task.title, task.url);
     final file = File('${dir.path}/$safeName');
 
     final request = http.Request('GET', Uri.parse(task.url));
@@ -566,11 +566,37 @@ class OfflineDownloadService {
     return dlDir;
   }
 
-  /// Creates a safe filename from [contentId], replacing non-alphanumeric
-  /// characters with underscores and appending a hash to avoid collisions.
-  static String _safeFilename(String contentId) {
-    final safe = contentId.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
-    return '${safe}_${contentId.hashCode.toRadixString(16)}';
+  /// Creates a safe filename from [title] with the file extension extracted
+  /// from [streamUrl]. Falls back to `.mp4` when no extension is found.
+  /// Uses the actual video title so files are recognizable in file managers
+  /// and playable by external video players.
+  static String _safeFilename(String contentId, String title, String streamUrl) {
+    // Sanitize the title: replace special characters with underscores, trim to 80 chars.
+    var base = title.replaceAll(RegExp(r'[^a-zA-Z0-9._\- ]'), '_');
+    base = base.replaceAll(RegExp(r'_+'), '_').trim();
+    if (base.length > 80) base = base.substring(0, 80);
+    if (base.isEmpty) {
+      base = 'download_${DateTime.now().millisecondsSinceEpoch}';
+    }
+
+    // Extract file extension from the stream URL path.
+    String ext = 'mp4';
+    try {
+      final path = Uri.parse(streamUrl).path;
+      final lastSegment = path.split('/').last;
+      if (lastSegment.contains('.')) {
+        final candidate = lastSegment.split('.').last.toLowerCase();
+        // Only accept common video/audio extensions.
+        if (RegExp(r'^(ts|mkv|mp4|avi|mov|flv|wmv|m4v|mpg|mpeg|webm|3gp|mp3|aac|flac|m4a)$')
+            .hasMatch(candidate)) {
+          ext = candidate;
+        }
+      }
+    } catch (_) {
+      // If URL parsing fails, keep the default 'mp4'.
+    }
+
+    return '$base.$ext';
   }
 
   static String _formatBytes(int bytes) {

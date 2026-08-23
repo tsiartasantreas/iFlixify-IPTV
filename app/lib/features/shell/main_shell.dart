@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -45,18 +43,9 @@ class _MainShellState extends State<MainShell> with RouteAware {
 
   /// Whether the UI should use the TV layout.
   ///
-  /// True when the user has explicitly enabled TV mode in settings, OR when
-  /// the platform is Linux, OR when the Android screen shortest side exceeds
-  /// 600 px (large tablet / set-top box).
-  bool get _isTv =>
-      _tvModeEnabled ||
-      Platform.isLinux ||
-      (Platform.isAndroid &&
-          MediaQueryData.fromView(
-                      WidgetsBinding.instance.platformDispatcher.views.first)
-                  .size
-                  .shortestSide >
-              600);
+  /// Controlled exclusively by the user's "TV Mode" toggle in Settings.
+  /// Foldable devices and large tablets no longer auto-switch to TV mode.
+  bool get _isTv => _tvModeEnabled;
 
   @override
   void initState() {

@@ -488,17 +488,35 @@ class _DetailScreenState extends State<DetailScreen> {
 
   /// Opens [playbackUrl] in an external video player (e.g. VLC, MX Player).
   ///
-  /// The previous `vlc://` / `intent://` url_launcher approach never worked
-  /// because Android 11+ package visibility stops the system from resolving
-  /// custom schemes and intent URIs from other apps. Instead we send real
-  /// Opens the stream in an external video player.
-  ///
-  /// Uses `url_launcher` with `externalApplication` mode which triggers
-  /// Android's built-in app chooser — VLC, MX Player, or any installed
-  /// video player will appear. No special packages needed.
+  /// Uses `externalApplication` so Android shows the app chooser for video
+  /// players instead of the browser.
   Future<void> _launchExternalPlayer(String playbackUrl) async {
+    final uri = Uri.parse(playbackUrl);
+
+    // Check if any app can handle this URL first.
     try {
-      final uri = Uri.parse(playbackUrl);
+      final canLaunch = await canLaunchUrl(uri);
+      if (!canLaunch) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                  'No external video player found. Install VLC or MX Player.'),
+              backgroundColor: AppColors.bgSurface,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+        return;
+      }
+    } catch (e) {
+      // ignore: avoid_print
+      print('[DetailScreen] canLaunchUrl check failed: $e');
+    }
+
+    // Launch with externalApplication which shows the Android app chooser
+    // for video players (VLC, MX Player, etc.) instead of the browser.
+    try {
       final launched = await launchUrl(
         uri,
         mode: LaunchMode.externalApplication,
@@ -506,15 +524,15 @@ class _DetailScreenState extends State<DetailScreen> {
       if (launched) return;
     } catch (e) {
       // ignore: avoid_print
-      print('[DetailScreen] Failed to launch external player: $e');
+      print('[DetailScreen] External application launch failed: $e');
     }
 
-    // Nothing could handle the stream.
+    // Nothing worked
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content:
-              Text('No external video player found. Install VLC or MX Player.'),
+          content: Text(
+              'Failed to open external player. Install VLC or MX Player.'),
           backgroundColor: AppColors.bgSurface,
           behavior: SnackBarBehavior.floating,
         ),
