@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -20,6 +21,9 @@ class ParentalControlService {
   /// SharedPreferences key for the hashed PIN.
   static const _pinHashKey = 'parental_pin_hash';
 
+  /// SharedPreferences key for the PIN salt.
+  static const _pinSaltKey = 'parental_pin_salt';
+
   /// SharedPreferences key for the hide-adult-content preference.
   static const _hideAdultContentKey = 'hide_adult_content';
 
@@ -37,19 +41,24 @@ class ParentalControlService {
   // PIN management
   // ---------------------------------------------------------------------------
 
-  /// Hashes [pin] with SHA-256 and stores it in SharedPreferences.
+  /// Hashes [pin] with a random salt using SHA-256 and stores both the
+  /// salt and the hash in SharedPreferences.
   Future<void> setPin(String pin) async {
-    final hash = _hashPin(pin);
+    final salt = _generateSalt();
+    final hash = _hashPin(pin, salt);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_pinHashKey, hash);
+    await prefs.setString(_pinSaltKey, salt);
   }
 
-  /// Returns `true` if [pin] matches the stored hash.
+  /// Returns `true` if [pin] matches the stored hash (verified against the
+  /// stored salt).
   Future<bool> verifyPin(String pin) async {
     final prefs = await SharedPreferences.getInstance();
     final storedHash = prefs.getString(_pinHashKey);
-    if (storedHash == null) return false;
-    return _hashPin(pin) == storedHash;
+    final storedSalt = prefs.getString(_pinSaltKey);
+    if (storedHash == null || storedSalt == null) return false;
+    return _hashPin(pin, storedSalt) == storedHash;
   }
 
   /// Returns `true` if a parental PIN has been configured.
@@ -58,10 +67,11 @@ class ParentalControlService {
     return prefs.containsKey(_pinHashKey);
   }
 
-  /// Removes the stored PIN, effectively unlocking all content.
+  /// Removes the stored PIN and salt, effectively unlocking all content.
   Future<void> removePin() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_pinHashKey);
+    await prefs.remove(_pinSaltKey);
   }
 
   /// Returns `true` if adult content should be hidden (i.e. the visibility
@@ -162,9 +172,16 @@ class ParentalControlService {
   // Helpers
   // ---------------------------------------------------------------------------
 
-  /// Returns the SHA-256 hex digest of [pin].
-  static String _hashPin(String pin) {
-    final bytes = utf8.encode(pin);
+  /// Generates a random 16-byte hex salt.
+  static String _generateSalt() {
+    final random = Random.secure();
+    final saltBytes = List<int>.generate(16, (_) => random.nextInt(256));
+    return saltBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  }
+
+  /// Returns the SHA-256 hex digest of [salt] + [pin].
+  static String _hashPin(String pin, String salt) {
+    final bytes = utf8.encode(salt + pin);
     return sha256.convert(bytes).toString();
   }
 }

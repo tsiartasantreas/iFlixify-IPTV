@@ -127,7 +127,7 @@ class AuthService {
     } on AuthException catch (e) {
       return AuthResult(error: e.message);
     } catch (e) {
-      return AuthResult(error: 'Unexpected error: $e');
+      return const AuthResult(error: 'An unexpected error occurred. Please try again.');
     }
   }
 
@@ -213,7 +213,7 @@ class AuthService {
     } on AuthException catch (e) {
       return AuthResult(error: e.message);
     } catch (e) {
-      return AuthResult(error: 'Unexpected error: $e');
+      return const AuthResult(error: 'An unexpected error occurred. Please try again.');
     }
   }
 

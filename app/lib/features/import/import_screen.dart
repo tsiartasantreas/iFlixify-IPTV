@@ -736,7 +736,7 @@ class ImportScreenState extends State<ImportScreen> {
           decoration: InputDecoration(
             labelText: 'Server URL',
             labelStyle: const TextStyle(color: AppColors.textSecondary),
-            hintText: 'http://server.com:8080',
+            hintText: 'https://server.com:8080',
             hintStyle: const TextStyle(color: AppColors.textSecondary),
             filled: true,
             fillColor: AppColors.bgSurface,

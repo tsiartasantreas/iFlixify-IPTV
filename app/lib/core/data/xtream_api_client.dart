@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'models/xtream_models.dart';
@@ -45,11 +46,9 @@ class XtreamApiClient {
 
   /// Fetches VOD (movie) categories.
   Future<List<XtreamCategory>> getVodCategories() async {
-    // ignore: avoid_print
-    print('[XtreamAPI] getVodCategories() — calling API...');
+    debugPrint('[XtreamAPI] getVodCategories() — calling API...');
     final json = await _get('&action=get_vod_categories');
-    // ignore: avoid_print
-    print('[XtreamAPI] getVodCategories() response keys: ${json.keys.toList()}, '
+    debugPrint('[XtreamAPI] getVodCategories() response keys: ${json.keys.toList()}, '
         'sample values: ${json.map((k, v) => MapEntry(k, v is List ? 'List(${v.length})' : v.runtimeType))}');
 
     // Find the actual list data and log its first item's keys.
@@ -62,43 +61,42 @@ class XtreamApiClient {
       final firstItem = rawList.first;
       if (firstItem is Map) {
         // ignore: avoid_print
-        print('[XtreamAPI] getVodCategories() first item keys: '
+        debugPrint('[XtreamAPI] getVodCategories() first item keys: '
             '${firstItem.keys.toList()}');
         // Log the category ID and name fields.
         final possibleIdKeys = ['category_id', 'id', 'cat_id', 'CategoryId'];
         for (final key in possibleIdKeys) {
           if (firstItem.containsKey(key)) {
             // ignore: avoid_print
-            print('[XtreamAPI]   → $key = ${firstItem[key]}');
+            debugPrint('[XtreamAPI]   → $key = ${firstItem[key]}');
           }
         }
         final possibleNameKeys = ['category_name', 'name', 'cat_name', 'CategoryName'];
         for (final key in possibleNameKeys) {
           if (firstItem.containsKey(key)) {
             // ignore: avoid_print
-            print('[XtreamAPI]   → $key = ${firstItem[key]}');
+            debugPrint('[XtreamAPI]   → $key = ${firstItem[key]}');
           }
         }
       }
     }
 
     final result = _parseCategoryList(json);
-    // ignore: avoid_print
-    print('[XtreamAPI] getVodCategories() parsed ${result.length} categories');
+    debugPrint('[XtreamAPI] getVodCategories() parsed ${result.length} categories');
     if (result.isNotEmpty) {
       // ignore: avoid_print
-      print('[XtreamAPI] getVodCategories() first parsed: id="${result.first.id}", '
+      debugPrint('[XtreamAPI] getVodCategories() first parsed: id="${result.first.id}", '
           'name="${result.first.name}"');
     }
     if (result.isEmpty) {
       // ignore: avoid_print
-      print('[XtreamAPI] WARNING: getVodCategories() returned 0 categories! '
+      debugPrint('[XtreamAPI] WARNING: getVodCategories() returned 0 categories! '
           'Raw keys: ${json.keys.toList()}, value types: '
           '${json.map((k, v) => MapEntry(k, v.runtimeType))}');
       // Log all values for debugging.
       for (final entry in json.entries) {
         // ignore: avoid_print
-        print('[XtreamAPI]   key="${entry.key}" → type=${entry.runtimeType}, '
+        debugPrint('[XtreamAPI]   key="${entry.key}" → type=${entry.runtimeType}, '
             'value=${entry.value is List ? "List(${(entry.value as List).length})" : entry.value.toString().length > 200 ? "${entry.value.toString().substring(0, 200)}..." : entry.value}');
       }
     }
@@ -112,15 +110,14 @@ class XtreamApiClient {
   /// `get_vod_streams` followed by `get_vod` until we get actual stream data.
   Future<List<XtreamStream>> getVodStreams({int? categoryId}) async {
     final catParam = categoryId != null ? '&category_id=$categoryId' : '';
-    // ignore: avoid_print
-    print('[XtreamAPI] getVodStreams(categoryId=$categoryId) — calling API...');
+    debugPrint('[XtreamAPI] getVodStreams(categoryId=$categoryId) — calling API...');
 
     // If we already know which action works for this provider, use it directly.
     if (_cachedVodAction != null) {
       final json = await _get('&action=$_cachedVodAction$catParam');
       final result = _parseStreamList(json);
       // ignore: avoid_print
-      print('[XtreamAPI] getVodStreams($categoryId) [cached=$_cachedVodAction] '
+      debugPrint('[XtreamAPI] getVodStreams($categoryId) [cached=$_cachedVodAction] '
           '→ ${result.length} streams');
       if (result.isNotEmpty) return result;
       // Cache was wrong (e.g. category is empty), fall through to try both.
@@ -130,20 +127,20 @@ class XtreamApiClient {
     final actions = ['get_vod_streams', 'get_vod'];
     for (final action in actions) {
       // ignore: avoid_print
-      print('[XtreamAPI] getVodStreams($categoryId) trying action=$action...');
+      debugPrint('[XtreamAPI] getVodStreams($categoryId) trying action=$action...');
       final json = await _get('&action=$action$catParam');
       final result = _parseStreamList(json);
       // ignore: avoid_print
-      print('[XtreamAPI] getVodStreams($categoryId) action=$action '
+      debugPrint('[XtreamAPI] getVodStreams($categoryId) action=$action '
           '→ ${result.length} streams');
       if (result.isNotEmpty) {
         _cachedVodAction = action;
         // ignore: avoid_print
-        print('[XtreamAPI] getVodStreams: caching working action="$action"');
+        debugPrint('[XtreamAPI] getVodStreams: caching working action="$action"');
         if (result.isNotEmpty) {
           final first = result.first;
           // ignore: avoid_print
-          print('[XtreamAPI] getVodStreams($categoryId) first parsed stream: '
+          debugPrint('[XtreamAPI] getVodStreams($categoryId) first parsed stream: '
               'name="${first.name}", streamId=${first.streamId}, '
               'containerExtension="${first.containerExtension}"');
         }
@@ -152,8 +149,7 @@ class XtreamApiClient {
     }
 
     // Neither action returned streams.
-    // ignore: avoid_print
-    print('[XtreamAPI] WARNING: getVodStreams($categoryId) returned 0 streams '
+    debugPrint('[XtreamAPI] WARNING: getVodStreams($categoryId) returned 0 streams '
         'from both get_vod_streams and get_vod!');
     return [];
   }
@@ -189,25 +185,23 @@ class XtreamApiClient {
   /// Fetches detailed series information including seasons and episodes.
   Future<XtreamSeriesInfo> getSeriesInfo(int seriesId) async {
     final json = await _get('&action=get_series_info&series_id=$seriesId');
-    // ignore: avoid_print
-    print('[XtreamAPI] getSeriesInfo($seriesId) response keys: ${json.keys.toList()}');
+    debugPrint('[XtreamAPI] getSeriesInfo($seriesId) response keys: ${json.keys.toList()}');
     final episodesRaw = json['episodes'];
-    // ignore: avoid_print
-    print('[XtreamAPI] episodes field type: ${episodesRaw?.runtimeType}, '
+    debugPrint('[XtreamAPI] episodes field type: ${episodesRaw?.runtimeType}, '
         'isMap: ${episodesRaw is Map}, '
         'seasons field type: ${json['seasons']?.runtimeType}');
     if (episodesRaw is Map) {
       // ignore: avoid_print
-      print('[XtreamAPI] episodes season keys: ${episodesRaw.keys.toList()}');
+      debugPrint('[XtreamAPI] episodes season keys: ${episodesRaw.keys.toList()}');
       for (final entry in episodesRaw.entries) {
         final eps = entry.value;
         // ignore: avoid_print
-        print('[XtreamAPI]   season ${entry.key}: '
+        debugPrint('[XtreamAPI]   season ${entry.key}: '
             '${(eps is List) ? eps.length : "not a List"} episodes');
         if (eps is List && eps.isNotEmpty) {
           final first = eps.first;
           // ignore: avoid_print
-          print('[XtreamAPI]     first ep keys: '
+          debugPrint('[XtreamAPI]     first ep keys: '
               '${(first is Map) ? first.keys.toList() : first.runtimeType}');
         }
       }
@@ -243,8 +237,7 @@ class XtreamApiClient {
         ? stream.containerExtension!
         : 'mp4';
     final url = '$baseUrl/movie/$username/$password/${stream.streamId}.$ext';
-    // ignore: avoid_print
-    print('[XtreamAPI] VOD URL: $url (containerExtension=${stream.containerExtension})');
+    debugPrint('[XtreamAPI] VOD URL: $url (containerExtension=${stream.containerExtension})');
     return url;
   }
 
@@ -255,8 +248,7 @@ class XtreamApiClient {
   ) {
     final ext = containerExtension.isNotEmpty ? containerExtension : 'mp4';
     final url = '$baseUrl/series/$username/$password/${episode.id}.$ext';
-    // ignore: avoid_print
-    print('[XtreamAPI] Series URL: $url (episodeId=${episode.id}, ext=$ext)');
+    debugPrint('[XtreamAPI] Series URL: $url (episodeId=${episode.id}, ext=$ext)');
     return url;
   }
 
@@ -269,8 +261,7 @@ class XtreamApiClient {
         ? stream.containerExtension!
         : 'ts';
     final url = '$baseUrl/live/$username/$password/${stream.streamId}.$ext';
-    // ignore: avoid_print
-    print('[XtreamAPI] Live URL: $url (streamType=${stream.streamType}, containerExtension=${stream.containerExtension})');
+    debugPrint('[XtreamAPI] Live URL: $url (streamType=${stream.streamType}, containerExtension=${stream.containerExtension})');
     return url;
   }
 
@@ -282,14 +273,12 @@ class XtreamApiClient {
     final uri = Uri.parse(
       '$baseUrl/player_api.php?username=$username&password=$password$actionSuffix',
     );
-    // ignore: avoid_print
-    print('[XtreamAPI] GET $uri');
+    debugPrint('[XtreamAPI] GET $uri');
     final response = await _client.get(uri);
-    // ignore: avoid_print
-    print('[XtreamAPI] ← ${response.statusCode} (${response.body.length} bytes)');
+    debugPrint('[XtreamAPI] ← ${response.statusCode} (${response.body.length} bytes)');
     if (response.statusCode != 200) {
       // ignore: avoid_print
-      print('[XtreamAPI] ERROR body (first 500 chars): '
+      debugPrint('[XtreamAPI] ERROR body (first 500 chars): '
           '${response.body.length > 500 ? response.body.substring(0, 500) : response.body}');
       throw XtreamApiException(
         'HTTP ${response.statusCode} for $uri',
@@ -301,17 +290,17 @@ class XtreamApiClient {
           ? '${response.body.substring(0, 500)}...'
           : response.body;
       // ignore: avoid_print
-      print('[XtreamAPI] Response preview (first 500 chars): $bodyPreview');
+      debugPrint('[XtreamAPI] Response preview (first 500 chars): $bodyPreview');
 
       final dynamic body = json.decode(response.body);
       if (body is List<dynamic>) {
         // Some Xtream endpoints return arrays. Wrap in a synthetic key so
         // callers can still iterate the result.
         // ignore: avoid_print
-        print('[XtreamAPI] Response is a List (${body.length} items) — wrapping');
+        debugPrint('[XtreamAPI] Response is a List (${body.length} items) — wrapping');
         if (body.isNotEmpty) {
           // ignore: avoid_print
-          print('[XtreamAPI]   first item keys: '
+          debugPrint('[XtreamAPI]   first item keys: '
               '${body.first is Map ? (body.first as Map).keys.toList() : body.first.runtimeType}');
         }
         return <String, dynamic>{'_list': body};
@@ -322,15 +311,15 @@ class XtreamApiClient {
         );
       }
       // ignore: avoid_print
-      print('[XtreamAPI] Response keys: ${body.keys.toList()}');
+      debugPrint('[XtreamAPI] Response keys: ${body.keys.toList()}');
       return body;
     } on XtreamApiException {
       rethrow;
     } on FormatException catch (e) {
       // ignore: avoid_print
-      print('[XtreamAPI] JSON parse error: ${e.message}');
+      debugPrint('[XtreamAPI] JSON parse error: ${e.message}');
       // ignore: avoid_print
-      print('[XtreamAPI] Raw body (first 500 chars): '
+      debugPrint('[XtreamAPI] Raw body (first 500 chars): '
           '${response.body.length > 500 ? response.body.substring(0, 500) : response.body}');
       throw XtreamApiException('Invalid JSON: ${e.message}');
     }
@@ -357,12 +346,11 @@ class XtreamApiClient {
         json['items'] as List<dynamic>? ??
         _findFirstListValue(json) ??
         [];
-    // ignore: avoid_print
-    print('[XtreamAPI] parseCategoryList → ${list.length} items '
+    debugPrint('[XtreamAPI] parseCategoryList → ${list.length} items '
         '(keys: ${json.keys.toList()})');
     if (list.isEmpty && json.isNotEmpty) {
       // ignore: avoid_print
-      print('[XtreamAPI] WARNING: parseCategoryList found no list in keys: '
+      debugPrint('[XtreamAPI] WARNING: parseCategoryList found no list in keys: '
           '${json.keys.toList()}, value types: '
           '${json.map((k, v) => MapEntry(k, v.runtimeType))}');
     }
@@ -391,8 +379,7 @@ class XtreamApiClient {
         json['list'] as List<dynamic>? ??
         _findFirstListValue(json) ??
         [];
-    // ignore: avoid_print
-    print('[XtreamAPI] parseStreamList → ${list.length} items '
+    debugPrint('[XtreamAPI] parseStreamList → ${list.length} items '
         '(keys: ${json.keys.toList()})');
     return list
         .whereType<Map<String, dynamic>>()
@@ -407,7 +394,7 @@ class XtreamApiClient {
     for (final value in json.values) {
       if (value is List<dynamic> && value.isNotEmpty) {
         // ignore: avoid_print
-        print('[XtreamAPI] _findFirstListValue: found list with '
+        debugPrint('[XtreamAPI] _findFirstListValue: found list with '
             '${value.length} items');
         return value;
       }
@@ -420,8 +407,7 @@ class XtreamApiClient {
         json['series'] as List<dynamic>? ??
         json['series_list'] as List<dynamic>? ??
         [];
-    // ignore: avoid_print
-    print('[XtreamAPI] parseSeriesList → ${list.length} items '
+    debugPrint('[XtreamAPI] parseSeriesList → ${list.length} items '
         '(keys: ${json.keys.toList()})');
     return list
         .whereType<Map<String, dynamic>>()
