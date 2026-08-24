@@ -139,8 +139,7 @@ class HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadActiveProfileInitials() async {
     try {
-      final profileManager = ProfileManager();
-      final active = await profileManager.getActiveProfile();
+      final active = await ProfileManager.instance.getActiveProfile();
       if (active != null && mounted) {
         final name = active.displayName.trim();
         final initials = name.isNotEmpty

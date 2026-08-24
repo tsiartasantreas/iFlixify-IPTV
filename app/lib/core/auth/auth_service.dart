@@ -113,7 +113,7 @@ class AuthService {
 
         // Create a local profile with the user's name.
         try {
-          final pm = _profileManager ?? ProfileManager();
+          final pm = _profileManager ?? ProfileManager.instance;
           await pm.createProfile(name);
         } catch (_) {
           // Profile creation failure is non-fatal.

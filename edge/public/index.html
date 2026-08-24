@@ -88,7 +88,7 @@
     <div class="logo">iFlixify</div>
     <nav class="nav-links">
       <a href="#features">Features</a>
-      <a href="/admin.html">Admin</a>
+      <a href="/admin.html" id="adminLink" style="display: none;">Admin</a>
       <a href="/profile.html">Profile</a>
     </nav>
   </header>
@@ -142,10 +142,11 @@
   <footer class="footer">
     <p>© 2026 iFlixify IPTV. All rights reserved.</p>
     <p style="margin-top: 8px;">
-      <a href="/profile.html">My Profile</a> · 
-      <a href="/admin.html">Admin Panel</a>
+      <a href="/profile.html">My Profile</a> ·
+      <a href="/admin.html" id="adminLinkFooter" style="display: none;">Admin Panel</a>
     </p>
   </footer>
+  <script src="https://unpkg.com/@supabase/supabase-js@2.112.3"></script>
   <script>
     // Point the download button at the latest release's .apk asset.
     // Asset filenames are versioned (iFlixify-v6.3.0-beta.apk), so
@@ -167,6 +168,34 @@
           }
         })
         .catch(function () { /* keep fallback href to releases page */ });
+    })();
+
+    // Admin link visibility: only show when user is logged in AND is admin
+    (function () {
+      var supabaseUrl = "https://zosckkklctvrsjqjmyiv.supabase.co";
+      var supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inpvc2Nra2tsY3R2cnNqcWpteWl2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYyODA2NDAsImV4cCI6MjEwMTg1NjY0MH0.bVAxexYv9e7Jo8PLRwYVyzLi6L9PFvxE3M8ZIheMmmA";
+      var sb = window.supabase.createClient(supabaseUrl, supabaseAnonKey);
+
+      async function checkAdmin() {
+        var adminLink = document.getElementById('adminLink');
+        var adminLinkFooter = document.getElementById('adminLinkFooter');
+
+        try {
+          var result = await sb.auth.getSession();
+          var session = result.data.session;
+          if (!session) return;
+
+          var profile = await sb.from('profiles').select('is_admin').eq('id', session.user.id).single();
+          if (profile.data && profile.data.is_admin) {
+            if (adminLink) adminLink.style.display = 'block';
+            if (adminLinkFooter) adminLinkFooter.style.display = 'inline';
+          }
+        } catch (e) {
+          // Silently fail - admin links stay hidden
+        }
+      }
+
+      checkAdmin();
     })();
   </script>
 </body>

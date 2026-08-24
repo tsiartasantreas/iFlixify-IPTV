@@ -108,6 +108,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   // -- Subtitle preferences --------------------------------------------------
   double _subtitleFontSize = 18.0;
   double _subtitleBgOpacity = 0.6;
+  double _subtitleOffset = 0.0;
+  bool _subtitleOutline = true;
 
   // -- Watch progress ---------------------------------------------------------
   late final WatchProgressService _watchService;
@@ -123,6 +125,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   DateTime? _lastResumeAttempt;
   bool _completed = false;
   EpisodeUpNext? _upNext;
+  StreamSubscription<Duration>? _durationSub;
 
   /// True when watch progress should be recorded for this session.
   bool get _recordsProgress =>
@@ -149,6 +152,35 @@ class _PlayerScreenState extends State<PlayerScreen> {
         // attempt the resume right away instead of waiting for the next
         // player notification.
         _tryResume();
+
+        // Listen for duration becoming available (the player may still be
+        // opening/buffering). When duration arrives, seek immediately.
+        _durationSub =
+            widget.controller.player.stream.duration.listen((d) {
+          if (d > Duration.zero && _resumePending && mounted) {
+            // ignore: avoid_print
+            print('[PlayerScreen] Duration available (${d.inSeconds}s) — seeking to ${widget.startPosition!.inSeconds}s');
+            widget.controller.seek(widget.startPosition!);
+            // Verify seek took effect after a brief delay.
+            Future.delayed(const Duration(milliseconds: 500), () {
+              if (mounted && _resumePending) {
+                if (widget.controller.position +
+                        const Duration(seconds: 5) >=
+                    widget.startPosition!) {
+                  _resumePending = false;
+                  _durationSub?.cancel();
+                  _durationSub = null;
+                  widget.controller.play();
+                }
+              }
+            });
+          }
+        });
+        // Cancel after 10 seconds to avoid leaks.
+        Future.delayed(const Duration(seconds: 10), () {
+          _durationSub?.cancel();
+          _durationSub = null;
+        });
       }
       // Preload the next episode (for series episodes) for the Up Next overlay.
       final id = widget.contentId;
@@ -165,7 +197,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
     });
 
     // Load subtitle preferences.
-    _loadSubtitlePrefs();
+    _loadSubtitlePrefs().then((_) {
+      _applySubtitleStyle();
+      _applySubtitlePosition(_subtitleOffset);
+    });
 
     // Sync volume fraction from controller.
     _volumeFraction = widget.controller.volumeFraction;
@@ -181,6 +216,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _indicatorHideTimer?.cancel();
     _singleTapTimer?.cancel();
     _seekIconTimer?.cancel();
+    _durationSub?.cancel();
     if (_recordsProgress) {
       _progressTimer?.cancel();
       widget.controller.removeListener(_onPlayerChanged);
@@ -982,8 +1018,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
         fontSize: _subtitleFontSize,
         color: Colors.white,
         backgroundColor: Colors.black.withValues(alpha: _subtitleBgOpacity),
+        shadows: _subtitleOutline
+            ? [
+                const Shadow(offset: Offset(-1, -1), color: Colors.black, blurRadius: 0),
+                const Shadow(offset: Offset(1, -1), color: Colors.black, blurRadius: 0),
+                const Shadow(offset: Offset(-1, 1), color: Colors.black, blurRadius: 0),
+                const Shadow(offset: Offset(1, 1), color: Colors.black, blurRadius: 0),
+              ]
+            : null,
       ),
       textScaler: const TextScaler.linear(1.0),
+      padding: EdgeInsets.fromLTRB(16.0, 0.0, 16.0, 24.0 + (_subtitleOffset * 100)),
     );
   }
 
@@ -997,8 +1042,22 @@ class _PlayerScreenState extends State<PlayerScreen> {
       setState(() {
         _subtitleFontSize = prefs.getDouble('subtitle_font_size') ?? 18.0;
         _subtitleBgOpacity = prefs.getDouble('subtitle_bg_opacity') ?? 0.6;
+        _subtitleOffset = prefs.getDouble('subtitle_offset') ?? 0.0;
+        _subtitleOutline = prefs.getBool('subtitle_outline') ?? true;
       });
     }
+  }
+
+  void _applySubtitlePosition(double offset) {
+    // Subtitle position is applied via SubtitleViewConfiguration padding.
+    // The Video widget rebuilds when setState is called.
+    setState(() {});
+  }
+
+  void _applySubtitleStyle() {
+    // Subtitle style is applied via SubtitleViewConfiguration.
+    // The Video widget rebuilds when setState is called.
+    setState(() {});
   }
 
   void _showSubtitleSettings() {
@@ -1092,6 +1151,61 @@ class _PlayerScreenState extends State<PlayerScreen> {
                           await prefs.setDouble('subtitle_bg_opacity', val);
                         },
                       ),
+                    ),
+                    const SizedBox(height: 20),
+                    // Subtitle vertical position
+                    const Text(
+                      'Vertical Position',
+                      style: TextStyle(
+                        color: AppColors.textSecondary,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        const Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
+                        Expanded(
+                          child: SliderTheme(
+                            data: SliderThemeData(
+                              activeTrackColor: AppColors.accentPrimary,
+                              inactiveTrackColor: AppColors.bgSurface,
+                              thumbColor: AppColors.accentPrimary,
+                              overlayColor: AppColors.accentPrimary.withValues(alpha: 0.2),
+                            ),
+                            child: Slider(
+                              value: _subtitleOffset,
+                              min: -1.0,
+                              max: 1.0,
+                              divisions: 20,
+                              onChanged: (v) async {
+                                setModalState(() => _subtitleOffset = v);
+                                setState(() => _subtitleOffset = v);
+                                _applySubtitlePosition(v);
+                                final prefs = await SharedPreferences.getInstance();
+                                await prefs.setDouble('subtitle_offset', v);
+                              },
+                            ),
+                          ),
+                        ),
+                        const Icon(Icons.arrow_drop_up, color: AppColors.textSecondary),
+                      ],
+                    ),
+                    const SizedBox(height: 20),
+                    // Subtitle outline toggle
+                    SwitchListTile(
+                      title: const Text('Text Outline', style: TextStyle(color: AppColors.textPrimary)),
+                      subtitle: const Text('Black outline around subtitle text', style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                      value: _subtitleOutline,
+                      onChanged: (v) async {
+                        setModalState(() => _subtitleOutline = v);
+                        setState(() => _subtitleOutline = v);
+                        _applySubtitleStyle();
+                        final prefs = await SharedPreferences.getInstance();
+                        await prefs.setBool('subtitle_outline', v);
+                      },
+                      activeThumbColor: AppColors.accentPrimary,
+                      contentPadding: EdgeInsets.zero,
                     ),
                     const SizedBox(height: 8),
                     const Text(

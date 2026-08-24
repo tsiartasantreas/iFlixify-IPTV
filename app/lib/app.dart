@@ -39,8 +39,7 @@ class _FlixiumAppState extends State<FlixiumApp> {
   Future<void> _bootstrap() async {
     // Ensure a default profile exists for first-time users.
     try {
-      final profileManager = ProfileManager();
-      await profileManager.ensureDefaultProfile();
+      await ProfileManager.instance.ensureDefaultProfile();
     } catch (_) {}
 
     // Check if this is the first launch

@@ -9,7 +9,7 @@ void main() {
 
   setUp(() {
     db = AppDatabase.forTesting(NativeDatabase.memory());
-    manager = ProfileManager(database: db);
+    manager = ProfileManager.forTesting(db);
   });
 
   tearDown(() async {

@@ -157,6 +157,7 @@ class _MainShellState extends State<MainShell> with RouteAware {
           return OfflineScreen(
             tabChangeNotifier: _tabChangeNotifier,
             tabIndex: index,
+            onExploreContent: () => _onTabChanged(2), // Movies tab
           );
         default:
           return HomeScreen(
@@ -197,6 +198,7 @@ class _MainShellState extends State<MainShell> with RouteAware {
           return OfflineScreen(
             tabChangeNotifier: _tabChangeNotifier,
             tabIndex: index,
+            onExploreContent: () => _onTabChanged(2), // Movies tab
           );
         default:
           return HomeScreen(
@@ -253,6 +255,7 @@ class _MainShellState extends State<MainShell> with RouteAware {
         return OfflineScreen(
           tabChangeNotifier: _tabChangeNotifier,
           tabIndex: index,
+          onExploreContent: () => _onTabChanged(2), // Movies tab
         );
       case 8: // Settings
         return const SettingsScreen();

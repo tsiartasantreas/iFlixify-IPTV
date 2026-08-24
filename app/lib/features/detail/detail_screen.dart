@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:android_intent_plus/android_intent.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:drift/drift.dart' as drift;
 import 'package:flutter/material.dart';
@@ -588,24 +589,22 @@ class _DetailScreenState extends State<DetailScreen> {
   /// [packageName] via an Android VIEW intent.
   Future<void> _launchWithPlayer(
       String playbackUrl, String packageName) async {
-    // Build an intent URI that targets the specific package.
-    final intentUri = Uri.parse(
-      'intent:$playbackUrl#Intent;'
-      'action=android.intent.action.VIEW;'
-      'type=video/*;'
-      'package=$packageName;'
-      'end',
-    );
-
+    // Use android_intent_plus to target the specific package directly.
+    // This avoids the browser opening instead of the actual app.
     try {
-      final launched = await launchUrl(
-        intentUri,
-        mode: LaunchMode.externalApplication,
+      final intent = AndroidIntent(
+        action: 'android.intent.action.VIEW',
+        data: playbackUrl,
+        type: 'video/*',
+        package: packageName,
       );
-      if (launched) return;
+      await intent.launch();
+      // ignore: avoid_print
+      print('[DetailScreen] Launched $packageName via AndroidIntent');
+      return;
     } catch (e) {
       // ignore: avoid_print
-      print('[DetailScreen] Intent launch failed for $packageName: $e');
+      print('[DetailScreen] AndroidIntent launch failed for $packageName: $e');
     }
 
     // Fallback: try launching the raw URL with externalApplication so

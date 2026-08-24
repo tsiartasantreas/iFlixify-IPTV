@@ -23,6 +23,7 @@ class OfflineScreen extends StatefulWidget {
     super.key,
     this.tabChangeNotifier,
     this.tabIndex = 0,
+    this.onExploreContent,
   });
 
   /// Notifier from the parent shell that fires when the active tab changes.
@@ -30,6 +31,10 @@ class OfflineScreen extends StatefulWidget {
 
   /// The index of this tab in the parent shell's navigation.
   final int tabIndex;
+
+  /// Called when the user taps "Explore Content" in the empty state.
+  /// Typically switches the parent shell to the Movies tab.
+  final VoidCallback? onExploreContent;
 
   @override
   State<OfflineScreen> createState() => _OfflineScreenState();
@@ -469,10 +474,11 @@ class _OfflineScreenState extends State<OfflineScreen> {
             SizedBox(
               height: 48,
               child: ElevatedButton.icon(
-                onPressed: () =>
-                    Navigator.of(context).popUntil((route) => route.isFirst),
+                onPressed: widget.onExploreContent ??
+                    () => Navigator.of(context)
+                        .popUntil((route) => route.isFirst),
                 icon: const Icon(Icons.explore),
-                label: const Text('Browse Content'),
+                label: const Text('Explore Content'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.accentPrimary,
                   foregroundColor: AppColors.textPrimary,

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:drift/drift.dart' as drift;
 
+import '../auth/profile_manager.dart';
 import 'database.dart';
 import 'supabase_client.dart';
 
@@ -23,9 +24,21 @@ import 'supabase_client.dart';
 /// final isFav = await service.isFavorite('vod:42');
 /// ```
 class FavoritesService {
-  FavoritesService({AppDatabase? database}) : _db = database ?? AppDatabase();
+  FavoritesService({
+    AppDatabase? database,
+    ProfileManager? profileManager,
+  })  : _db = database ?? AppDatabase(),
+        _profileManager = profileManager ?? ProfileManager.instance;
 
   final AppDatabase _db;
+  final ProfileManager _profileManager;
+
+  /// Prefixes [contentId] with the active profile ID so each profile has
+  /// its own isolated favourites list.
+  String _scopedId(String contentId) {
+    final profileId = _profileManager.activeProfileId ?? 'default';
+    return '$profileId:$contentId';
+  }
 
   /// Adds an item to favourites.
   ///
@@ -38,9 +51,10 @@ class FavoritesService {
     String? poster,
     String? url,
   }) async {
+    final scopedId = _scopedId(contentId);
     await _db.into(_db.favorites).insertOnConflictUpdate(
           FavoritesCompanion.insert(
-            contentId: contentId,
+            contentId: scopedId,
             contentType: contentType,
             title: drift.Value(title),
             poster: drift.Value(poster),
@@ -53,17 +67,19 @@ class FavoritesService {
 
   /// Removes an item from favourites by its [contentId].
   Future<void> removeFromFavorites(String contentId) async {
+    final scopedId = _scopedId(contentId);
     await (_db.delete(_db.favorites)
-          ..where((t) => t.contentId.equals(contentId)))
+          ..where((t) => t.contentId.equals(scopedId)))
         .go();
     _pushToCloud();
   }
 
   /// Returns `true` if the item with [contentId] is in favourites.
   Future<bool> isFavorite(String contentId) async {
+    final scopedId = _scopedId(contentId);
     final count = await (_db.selectOnly(_db.favorites)
           ..addColumns([_db.favorites.contentId.count()])
-          ..where(_db.favorites.contentId.equals(contentId)))
+          ..where(_db.favorites.contentId.equals(scopedId)))
         .getSingle();
     return (count.read(_db.favorites.contentId.count()) ?? 0) > 0;
   }
@@ -97,18 +113,24 @@ class FavoritesService {
 
   /// Returns all favourites ordered by most recently added.
   Future<List<Favorite>> getFavorites() async {
-    return (_db.select(_db.favorites)
+    final profileId = _profileManager.activeProfileId ?? 'default';
+    final prefix = '$profileId:';
+    final all = await (_db.select(_db.favorites)
           ..orderBy([(t) => drift.OrderingTerm.desc(t.addedAt)]))
         .get();
+    return all.where((f) => f.contentId.startsWith(prefix)).toList();
   }
 
   /// Returns favourites filtered by [contentType], ordered by most recently
   /// added.
   Future<List<Favorite>> getFavoritesByType(String contentType) async {
-    return (_db.select(_db.favorites)
+    final profileId = _profileManager.activeProfileId ?? 'default';
+    final prefix = '$profileId:';
+    final all = await (_db.select(_db.favorites)
           ..where((t) => t.contentType.equals(contentType))
           ..orderBy([(t) => drift.OrderingTerm.desc(t.addedAt)]))
         .get();
+    return all.where((f) => f.contentId.startsWith(prefix)).toList();
   }
 
   // ---------------------------------------------------------------------------

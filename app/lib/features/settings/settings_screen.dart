@@ -71,7 +71,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void initState() {
     super.initState();
     _db = widget.database;
-    _profileManager = ProfileManager(database: _db);
+    _profileManager = ProfileManager.instance;
     _entitlementService = EntitlementService();
     _loadSettings();
   }

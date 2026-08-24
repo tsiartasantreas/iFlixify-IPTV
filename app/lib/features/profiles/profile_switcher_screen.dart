@@ -29,7 +29,7 @@ class _ProfileSwitcherScreenState extends State<ProfileSwitcherScreen> {
   @override
   void initState() {
     super.initState();
-    _profileManager = widget.profileManager ?? ProfileManager();
+    _profileManager = widget.profileManager ?? ProfileManager.instance;
     _loadProfiles();
   }
 

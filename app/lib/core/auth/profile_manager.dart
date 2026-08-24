@@ -8,7 +8,32 @@ import 'package:iflixify/core/data/database.dart';
 class ProfileManager {
   final AppDatabase _db;
 
-  ProfileManager({AppDatabase? database}) : _db = database ?? AppDatabase();
+  /// Cached active profile ID for synchronous access.
+  /// Updated by [getActiveProfile], [switchProfile], and [ensureDefaultProfile].
+  int? _cachedActiveProfileId;
+
+  /// Singleton instance for app-wide access.
+  static ProfileManager? _instance;
+
+  ProfileManager._({AppDatabase? database}) : _db = database ?? AppDatabase();
+
+  /// Constructor for testing with a custom database.
+  ProfileManager.forTesting(AppDatabase database) : _db = database;
+
+  /// Returns the shared singleton instance.
+  static ProfileManager get instance {
+    _instance ??= ProfileManager._();
+    return _instance!;
+  }
+
+  /// Allows overriding the singleton (useful for testing).
+  static void setInstance(ProfileManager manager) {
+    _instance = manager;
+  }
+
+  /// Returns the active profile ID synchronously (from cache).
+  /// Returns null if no profile has been loaded yet.
+  String? get activeProfileId => _cachedActiveProfileId?.toString();
 
   /// Get all profiles, ordered by creation date.
   Future<List<UserProfile>> getProfiles() async {
@@ -21,7 +46,9 @@ class ProfileManager {
   Future<UserProfile?> getActiveProfile() async {
     final query = _db.select(_db.userProfiles)
       ..where((t) => t.isActive.equals(true));
-    return query.getSingleOrNull();
+    final profile = await query.getSingleOrNull();
+    _cachedActiveProfileId = profile?.id;
+    return profile;
   }
 
   /// Create a new profile. If it's the first profile, it becomes active.
@@ -53,6 +80,8 @@ class ProfileManager {
     await (_db.update(_db.userProfiles)
       ..where((t) => t.id.equals(profileId)))
         .write(const UserProfilesCompanion(isActive: drift.Value(true)));
+
+    _cachedActiveProfileId = profileId;
   }
 
   /// Delete a profile (cannot delete the active one).
@@ -82,7 +111,11 @@ class ProfileManager {
   Future<void> ensureDefaultProfile() async {
     final count = await getProfileCount();
     if (count == 0) {
-      await createProfile('Profile 1', avatarColor: 0xFFE50914);
+      final profile = await createProfile('Profile 1', avatarColor: 0xFFE50914);
+      _cachedActiveProfileId = profile.id;
+    } else {
+      // Ensure cache is populated even when profiles already exist.
+      await getActiveProfile();
     }
   }
 

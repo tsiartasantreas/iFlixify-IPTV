@@ -2,6 +2,7 @@ import 'package:drift/drift.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../auth/auth_service.dart';
+import '../auth/profile_manager.dart';
 import '../data/database.dart';
 import '../entitlement/entitlement_service.dart';
 import 'supabase_client.dart';
@@ -21,15 +22,18 @@ class WatchProgressService {
     EntitlementService? entitlementService,
     AuthService? authService,
     SupabaseClient? client,
+    ProfileManager? profileManager,
   })  : _db = database,
         _entitlement = entitlementService,
         _authService = authService,
-        _client = client;
+        _client = client,
+        _profileManager = profileManager ?? ProfileManager.instance;
 
   final AppDatabase? _db;
   final EntitlementService? _entitlement;
   final AuthService? _authService;
   final SupabaseClient? _client;
+  final ProfileManager _profileManager;
 
   AppDatabase get _database => _db ?? AppDatabase();
 
@@ -50,6 +54,14 @@ class WatchProgressService {
 
   bool get _isPro => _entitlement?.isPro ?? false;
 
+  /// Prefixes [contentId] with the active profile ID so each profile has
+  /// its own isolated watch progress.
+  String _scopedId(String contentId) {
+    // Prefix with active profile ID so each profile has its own progress
+    final profileId = _profileManager.activeProfileId ?? 'default';
+    return '$profileId:$contentId';
+  }
+
   // ---------------------------------------------------------------------------
   // Local CRUD
   // ---------------------------------------------------------------------------
@@ -65,6 +77,8 @@ class WatchProgressService {
   ) async {
     if (durationMs <= 0) return;
 
+    final scopedId = _scopedId(contentId);
+
     // Treat >= 90% watched as "completed" — remove from continue watching.
     if (positionMs >= durationMs * 0.9) {
       await clearProgress(contentId);
@@ -73,7 +87,7 @@ class WatchProgressService {
 
     await _database.into(_database.watchProgressEntry).insertOnConflictUpdate(
       WatchProgressEntryCompanion(
-        contentId: Value(contentId),
+        contentId: Value(scopedId),
         positionMs: Value(positionMs),
         durationMs: Value(durationMs),
         updatedAt: Value(DateTime.now()),
@@ -83,8 +97,9 @@ class WatchProgressService {
 
   /// Returns saved progress for [contentId], or `null` if none exists.
   Future<WatchProgressEntryData?> getProgress(String contentId) async {
+    final scopedId = _scopedId(contentId);
     final query = _database.select(_database.watchProgressEntry)
-      ..where((w) => w.contentId.equals(contentId));
+      ..where((w) => w.contentId.equals(scopedId));
     return query.getSingleOrNull();
   }
 
@@ -94,10 +109,14 @@ class WatchProgressService {
   Future<List<WatchProgressEntryData>> getContinueWatching({
     int limit = 10,
   }) async {
+    final profileId = _profileManager.activeProfileId ?? 'default';
+    final prefix = '$profileId:';
     final allEntries = await _database.select(_database.watchProgressEntry).get();
-    // Filter in Dart: keep items where position >= 5% of duration (exclude
-    // accidental taps) and position < 90% (exclude completed).
+    // Filter in Dart: keep items belonging to the active profile, where
+    // position >= 5% of duration (exclude accidental taps) and position < 90%
+    // (exclude completed).
     final filtered = allEntries.where((e) {
+      if (!e.contentId.startsWith(prefix)) return false;
       if (e.durationMs <= 0) return false;
       final fraction = e.positionMs / e.durationMs;
       return fraction >= 0.05 && fraction < 0.9;
@@ -108,8 +127,9 @@ class WatchProgressService {
 
   /// Clears saved progress for [contentId].
   Future<void> clearProgress(String contentId) async {
+    final scopedId = _scopedId(contentId);
     await (_database.delete(_database.watchProgressEntry)
-          ..where((w) => w.contentId.equals(contentId)))
+          ..where((w) => w.contentId.equals(scopedId)))
         .go();
   }
 
