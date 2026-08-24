@@ -107,10 +107,20 @@ class PurchaseService {
         return;
       }
 
-      // Update tier in Supabase
-      await supabase.from('profiles').update({
-        'tier': 'pro',
-      }).eq('id', user.id);
+      // Call server-side validation
+      final response = await supabase.functions.invoke(
+        'validate-purchase',
+        body: {
+          'purchaseToken': purchase.verificationData.serverVerificationData,
+          'productId': purchase.productID,
+        },
+      );
+
+      if (response.status != 200) {
+        _purchaseError = 'Purchase verification failed';
+        _purchasePending = false;
+        return;
+      }
 
       // Refresh entitlement cache
       await _entitlement?.refreshTier();

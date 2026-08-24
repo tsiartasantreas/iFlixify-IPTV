@@ -79,11 +79,12 @@ export default function UserDetailPage() {
     if (!user) return;
     setUpdating(true);
     await supabase.from("profiles").update({ tier: newTier }).eq("id", user.id);
+    const { data: { user: adminUser } } = await supabase.auth.getUser();
     await supabase.from("admin_audit_log").insert({
+      admin_id: adminUser?.id,
       action: "tier_change",
       target: `user:${user.id}`,
       details: `Changed tier from ${user.tier} to ${newTier}`,
-      admin: "admin@flixium",
     });
     setUser({ ...user, tier: newTier });
     setUpdating(false);
@@ -93,11 +94,12 @@ export default function UserDetailPage() {
     if (!license) return;
     setUpdating(true);
     await supabase.from("licenses").update({ status: "revoked" }).eq("id", license.id);
+    const { data: { user: adminUser } } = await supabase.auth.getUser();
     await supabase.from("admin_audit_log").insert({
+      admin_id: adminUser?.id,
       action: "license_revoked",
       target: `license:${license.id}`,
       details: `Revoked license for user ${userId}`,
-      admin: "admin@flixium",
     });
     setLicense({ ...license, status: "revoked" });
     setUpdating(false);
