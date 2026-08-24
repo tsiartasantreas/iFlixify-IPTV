@@ -497,6 +497,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 // -- Video surface -------------------------------------------
                 Center(
                   child: Video(
+                    key: ValueKey('$_subtitleOffset-$_subtitleOutline-$_subtitleFontSize-$_subtitleBgOpacity'),
                     controller: ctrl.videoController,
                     controls: (state) => const SizedBox.shrink(),
                     subtitleViewConfiguration: _buildSubtitleConfig(),

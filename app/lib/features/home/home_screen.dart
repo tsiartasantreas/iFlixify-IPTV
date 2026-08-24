@@ -230,18 +230,22 @@ class HomeScreenState extends State<HomeScreen> {
         'vodItems=${filteredVod.length}, series=${filteredSeries.length}, '
         'radio=${radioStations.length}');
 
-    // Load Continue Watching items (Pro only). Refresh the cached tier once
-    // so `isPro` reflects the actual account instead of the default 'free'.
+    // Load Continue Watching items for all users. Refresh the cached tier
+    // once so `isPro` reflects the actual account instead of the default
+    // 'free' (used elsewhere for cloud-sync gating).
     final continueWatchingItems = <ContinueWatchingItem>[];
     if (!_tierRefreshed) {
       await _entitlementService.refreshTier();
       _tierRefreshed = true;
     }
-    if (_entitlementService.isPro) {
+    {
       final progressEntries =
           await _watchProgressService.getContinueWatching(limit: 10);
       for (final entry in progressEntries) {
-        final item = await _resolveContentItem(entry.contentId);
+        // Strip the profile prefix so _resolveContentItem receives the raw
+        // contentId (e.g. "vod:42" not "profile123:vod:42").
+        final rawId = _stripProfilePrefix(entry.contentId);
+        final item = await _resolveContentItem(rawId);
         if (item != null) continueWatchingItems.add(item);
       }
     }
@@ -488,8 +492,11 @@ class HomeScreenState extends State<HomeScreen> {
       final history =
           await _watchProgressService.getContinueWatching(limit: 20);
       for (final entry in history) {
+        // Strip the profile prefix so the raw contentId is used for
+        // signal collection and exclusion.
+        final rawId = _stripProfilePrefix(entry.contentId);
         final origin = await _collectRecommendationSignals(
-            entry.contentId, genreSignals, groupSignals);
+            rawId, genreSignals, groupSignals);
         if (origin != null) excluded.add(origin);
       }
     } catch (_) {}
@@ -498,9 +505,9 @@ class HomeScreenState extends State<HomeScreen> {
     try {
       final favorites = await _favoritesService.getFavorites();
       for (final fav in favorites) {
-        excluded.add(fav.contentId);
-        await _collectRecommendationSignals(
-            fav.contentId, genreSignals, groupSignals);
+        final rawId = _stripProfilePrefix(fav.contentId);
+        excluded.add(rawId);
+        await _collectRecommendationSignals(rawId, genreSignals, groupSignals);
       }
     } catch (_) {}
 
@@ -759,6 +766,20 @@ class HomeScreenState extends State<HomeScreen> {
   // Content resolution for Continue Watching
   // ---------------------------------------------------------------------------
 
+  /// Strips the profile-scoping prefix (e.g. `"profile123:"`) from a
+  /// [contentId] that may have been stored by [WatchProgressService].
+  ///
+  /// Returns the raw contentId (e.g. `"vod:42"`) that the rest of the app
+  /// expects. Legacy entries without a prefix are returned unchanged.
+  String _stripProfilePrefix(String contentId) {
+    final profileId = ProfileManager.instance.activeProfileId ?? 'default';
+    final prefix = '$profileId:';
+    if (contentId.startsWith(prefix)) {
+      return contentId.substring(prefix.length);
+    }
+    return contentId;
+  }
+
   /// Resolves a polymorphic [contentId] (e.g. `"vod:5"`, `"episode:12"`)
   /// into a [ContinueWatchingItem] by looking up the corresponding database
   /// table.
@@ -897,7 +918,9 @@ class HomeScreenState extends State<HomeScreen> {
 
   void _navigateToDetailFromFavorite(Favorite fav) {
     // Parse the contentId to extract the numeric id (e.g. "vod:42" -> 42).
-    final parts = fav.contentId.split(':');
+    // Strip the profile prefix first so the split produces the expected 2 parts.
+    final rawContentId = _stripProfilePrefix(fav.contentId);
+    final parts = rawContentId.split(':');
     final id = parts.length == 2 ? int.tryParse(parts[1]) ?? 0 : 0;
     Navigator.of(context)
         .push(

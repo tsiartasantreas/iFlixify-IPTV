@@ -96,27 +96,46 @@ class WatchProgressService {
   }
 
   /// Returns saved progress for [contentId], or `null` if none exists.
+  ///
+  /// Looks up the profile-scoped entry first, then falls back to a legacy
+  /// entry (without profile prefix) for backward compatibility.
   Future<WatchProgressEntryData?> getProgress(String contentId) async {
     final scopedId = _scopedId(contentId);
     final query = _database.select(_database.watchProgressEntry)
       ..where((w) => w.contentId.equals(scopedId));
-    return query.getSingleOrNull();
+    final result = await query.getSingleOrNull();
+    if (result != null) return result;
+
+    // Fallback: try the legacy (unscoped) contentId.
+    final legacyQuery = _database.select(_database.watchProgressEntry)
+      ..where((w) => w.contentId.equals(contentId));
+    return legacyQuery.getSingleOrNull();
   }
 
   /// Returns up to [limit] items with saved progress, most recently updated.
   ///
   /// Items that are < 5% played are excluded (likely accidental taps).
+  ///
+  /// Includes both profile-scoped entries (prefix `"<profileId>:"`) and
+  /// legacy entries (no prefix) so that data saved before the profile-scoping
+  /// migration is not silently lost.
   Future<List<WatchProgressEntryData>> getContinueWatching({
     int limit = 10,
   }) async {
     final profileId = _profileManager.activeProfileId ?? 'default';
     final prefix = '$profileId:';
     final allEntries = await _database.select(_database.watchProgressEntry).get();
-    // Filter in Dart: keep items belonging to the active profile, where
-    // position >= 5% of duration (exclude accidental taps) and position < 90%
-    // (exclude completed).
+    // Filter in Dart: keep items belonging to the active profile (or legacy
+    // items with no profile prefix), where position >= 5% of duration
+    // (exclude accidental taps) and position < 90% (exclude completed).
     final filtered = allEntries.where((e) {
-      if (!e.contentId.startsWith(prefix)) return false;
+      // Accept entries scoped to the active profile.
+      final isScoped = e.contentId.startsWith(prefix);
+      // Accept legacy entries that have no profile prefix at all.
+      // A profile-scoped id looks like "<profileId>:type:id" (3 colon-parts),
+      // while a legacy id looks like "type:id" (2 colon-parts).
+      final isLegacy = !isScoped && e.contentId.split(':').length == 2;
+      if (!isScoped && !isLegacy) return false;
       if (e.durationMs <= 0) return false;
       final fraction = e.positionMs / e.durationMs;
       return fraction >= 0.05 && fraction < 0.9;

@@ -42,6 +42,11 @@ class _FlixiumAppState extends State<FlixiumApp> {
       await ProfileManager.instance.ensureDefaultProfile();
     } catch (_) {}
 
+    // Pull profiles from Supabase if the user is authenticated.
+    try {
+      await ProfileManager.instance.syncFromCloud();
+    } catch (_) {}
+
     // Check if this is the first launch
     _showOnboarding = !await OnboardingScreen.hasCompleted();
 

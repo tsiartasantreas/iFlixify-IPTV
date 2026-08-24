@@ -387,6 +387,7 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
               // -- Video surface ---------------------------------------------
               Center(
                 child: Video(
+                  key: ValueKey('$_subtitleOffset-$_subtitleOutline-$_subtitleFontSize-$_subtitleBgOpacity'),
                   controller: ctrl.videoController,
                   controls: (state) => const SizedBox.shrink(),
                   subtitleViewConfiguration: _buildSubtitleConfig(),

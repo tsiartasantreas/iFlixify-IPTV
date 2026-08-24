@@ -1,10 +1,13 @@
 import 'package:drift/drift.dart' as drift;
+import 'package:flutter/foundation.dart';
 import 'package:iflixify/core/data/database.dart';
+import 'package:iflixify/core/data/supabase_client.dart';
 
 /// Manages local user profiles for multi-user support.
 ///
 /// Each profile has a display name, optional Supabase user linkage,
-/// an avatar color, and an active flag.
+/// an avatar color, and an active flag. Profiles sync to Supabase
+/// when the user is authenticated for cross-device support.
 class ProfileManager {
   final AppDatabase _db;
 
@@ -65,8 +68,12 @@ class ProfileManager {
       ),
     );
 
-    return (_db.select(_db.userProfiles)..where((t) => t.id.equals(id)))
+    final profile = await (_db.select(_db.userProfiles)..where((t) => t.id.equals(id)))
         .getSingle();
+
+    // Fire-and-forget cloud sync.
+    syncToCloud();
+    return profile;
   }
 
   /// Switch the active profile.
@@ -82,6 +89,9 @@ class ProfileManager {
         .write(const UserProfilesCompanion(isActive: drift.Value(true)));
 
     _cachedActiveProfileId = profileId;
+
+    // Fire-and-forget cloud sync.
+    syncToCloud();
   }
 
   /// Delete a profile (cannot delete the active one).
@@ -92,12 +102,18 @@ class ProfileManager {
     }
     await (_db.delete(_db.userProfiles)..where((t) => t.id.equals(profileId)))
         .go();
+
+    // Fire-and-forget cloud sync.
+    syncToCloud();
   }
 
   /// Update a profile's display name.
   Future<void> updateProfile(int profileId, {String? displayName}) async {
     await (_db.update(_db.userProfiles)..where((t) => t.id.equals(profileId)))
         .write(UserProfilesCompanion(displayName: drift.Value(displayName ?? '')));
+
+    // Fire-and-forget cloud sync.
+    syncToCloud();
   }
 
   /// Get total profile count.
@@ -116,6 +132,117 @@ class ProfileManager {
     } else {
       // Ensure cache is populated even when profiles already exist.
       await getActiveProfile();
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Cloud sync (Supabase)
+  // ---------------------------------------------------------------------------
+
+  /// The current Supabase user ID, or null if not authenticated.
+  String? get _userId {
+    if (!SupabaseService.isInitialized) return null;
+    return SupabaseService.client.auth.currentUser?.id;
+  }
+
+  /// Converts a local ARGB integer color to a hex string (e.g. '#E50914').
+  static String _colorToHex(int color) {
+    // Strip alpha channel, keep RGB.
+    final rgb = color & 0xFFFFFF;
+    return '#${rgb.toRadixString(16).padLeft(6, '0').toUpperCase()}';
+  }
+
+  /// Converts a hex color string (e.g. '#E50914') to a 32-bit ARGB integer.
+  static int _hexToColor(String hex) {
+    final cleaned = hex.replaceFirst('#', '');
+    final rgb = int.parse(cleaned, radix: 16);
+    return 0xFF000000 | rgb; // Add full alpha.
+  }
+
+  /// Uploads all local profiles to Supabase `user_profiles` table.
+  ///
+  /// Requires an authenticated user. Errors are logged but not thrown
+  /// so that sync failures never block local operations.
+  Future<void> syncToCloud() async {
+    final uid = _userId;
+    if (uid == null) return;
+
+    try {
+      final profiles = await getProfiles();
+      final rows = profiles.map((p) => {
+        'user_id': uid,
+        'profile_id': p.id,
+        'display_name': p.displayName,
+        'avatar_color': _colorToHex(p.avatarColor),
+        'is_active': p.isActive,
+        'created_at': p.createdAt.toIso8601String(),
+      }).toList();
+
+      if (rows.isEmpty) return;
+
+      // Upsert all profiles — the UNIQUE(user_id, profile_id) constraint
+      // ensures idempotency.
+      await SupabaseService.client
+          .from('user_profiles')
+          .upsert(rows);
+    } catch (e) {
+      debugPrint('[ProfileManager] syncToCloud failed: $e');
+    }
+  }
+
+  /// Downloads profiles from Supabase `user_profiles` into the local DB.
+  ///
+  /// Merges with existing local profiles: cloud profiles that don't exist
+  /// locally are inserted; existing ones are updated. Requires authentication.
+  Future<void> syncFromCloud() async {
+    final uid = _userId;
+    if (uid == null) return;
+
+    try {
+      final response = await SupabaseService.client
+          .from('user_profiles')
+          .select()
+          .eq('user_id', uid)
+          .order('created_at', ascending: true);
+
+      final cloudProfiles = response as List<dynamic>;
+      if (cloudProfiles.isEmpty) return;
+
+      final localProfiles = await getProfiles();
+      final localById = {for (final p in localProfiles) p.id: p};
+
+      for (final cloud in cloudProfiles) {
+        final profileId = cloud['profile_id'] as int;
+        final displayName = cloud['display_name'] as String? ?? 'User';
+        final avatarColor = _hexToColor(cloud['avatar_color'] as String? ?? '#E50914');
+        final isActive = cloud['is_active'] as bool? ?? false;
+
+        if (localById.containsKey(profileId)) {
+          // Update existing local profile.
+          await (_db.update(_db.userProfiles)
+            ..where((t) => t.id.equals(profileId)))
+              .write(UserProfilesCompanion(
+                displayName: drift.Value(displayName),
+                avatarColor: drift.Value(avatarColor),
+                isActive: drift.Value(isActive),
+              ));
+        } else {
+          // Insert new profile from cloud.
+          await _db.into(_db.userProfiles).insert(
+            UserProfilesCompanion.insert(
+              displayName: displayName,
+              avatarColor: avatarColor,
+              createdAt: DateTime.tryParse(cloud['created_at'] as String? ?? '') ?? DateTime.now(),
+              isActive: drift.Value(isActive),
+            ),
+          );
+        }
+      }
+
+      // Refresh cache after sync.
+      await getActiveProfile();
+    } catch (e) {
+      debugPrint('[ProfileManager] syncFromCloud failed: $e');
     }
   }
 
