@@ -62,6 +62,10 @@ class HomeScreenState extends State<HomeScreen> {
   bool _parentalLocked = false;
   String _activeProfileInitials = 'U';
 
+  /// Ensures the one-time profile cloud sync (see [_maybeSyncProfilesFromCloud])
+  /// runs at most once per app process.
+  static bool _profileSyncDone = false;
+
   /// Tracks the last seen tab-change notifier value so we only reload when
   /// the tab actually changes (not on the initial build).
   int _lastSeenChangeCount = 0;
@@ -726,6 +730,16 @@ class HomeScreenState extends State<HomeScreen> {
       await SupabaseService.initialize();
     } catch (_) {}
 
+    // One-time profile sync: Supabase is deliberately NOT initialized during
+    // app bootstrap (its app_links plugin crashes on Android 16), so the
+    // syncFromCloud() call in app.dart is a no-op. Now that Supabase has been
+    // initialized successfully here, pull cloud profiles once, fire-and-forget.
+    if (SupabaseService.isInitialized && !_profileSyncDone) {
+      _profileSyncDone = true;
+      // ignore: unawaited_futures
+      ProfileManager.instance.syncFromCloud();
+    }
+
     String? userId;
     if (SupabaseService.isInitialized) {
       userId = SupabaseService.client.auth.currentUser?.id;
@@ -792,7 +806,17 @@ class HomeScreenState extends State<HomeScreen> {
   ///
   /// Returns the raw contentId (e.g. `"vod:42"`) that the rest of the app
   /// expects. Legacy entries without a prefix are returned unchanged.
+  ///
+  /// Also handles stale rows that carry a *different* profile prefix (e.g.
+  /// `"default:vod:42"` or `"17:vod:42"` saved under an older/other profile):
+  /// any 3-part id whose first part is `"default"` or all digits is treated
+  /// as a prefixed id and stripped.
   String _stripProfilePrefix(String contentId) {
+    final parts = contentId.split(':');
+    if (parts.length == 3 &&
+        (parts[0] == 'default' || int.tryParse(parts[0]) != null)) {
+      return '${parts[1]}:${parts[2]}';
+    }
     final profileId = ProfileManager.instance.activeProfileId ?? 'default';
     final prefix = '$profileId:';
     if (contentId.startsWith(prefix)) {
@@ -801,27 +825,49 @@ class HomeScreenState extends State<HomeScreen> {
     return contentId;
   }
 
-  /// Resolves a polymorphic [contentId] (e.g. `"vod:5"`, `"episode:12"`)
-  /// into a [ContinueWatchingItem] by looking up the corresponding database
-  /// table.
+  /// Resolves a polymorphic [contentId] (e.g. `"vod:5"`, `"episode:12"`,
+  /// `"live:3"`, `"channel:3"`, `"radio:7"`) into a [ContinueWatchingItem]
+  /// by looking up the corresponding database table.
   Future<ContinueWatchingItem?> _resolveContentItem(String contentId) async {
+    // Normalize: strip a stale/legacy profile prefix so ids like
+    // "default:vod:42" resolve the same as "vod:42".
+    contentId = _stripProfilePrefix(contentId);
+
     final parts = contentId.split(':');
-    if (parts.length != 2) return null;
+    if (parts.length != 2) {
+      debugPrint(
+          '[HomeScreen] _resolveContentItem: unresolved contentId "$contentId"');
+      return null;
+    }
 
     final type = parts[0];
     final id = int.tryParse(parts[1]);
-    if (id == null) return null;
+    if (id == null) {
+      debugPrint(
+          '[HomeScreen] _resolveContentItem: unresolved contentId "$contentId"');
+      return null;
+    }
 
     final progress = await _watchProgressService.getProgress(contentId);
-    if (progress == null) return null;
+    if (progress == null) {
+      debugPrint(
+          '[HomeScreen] _resolveContentItem: unresolved contentId "$contentId"');
+      return null;
+    }
     final progressFraction =
         progress.durationMs > 0 ? progress.positionMs / progress.durationMs : 0.0;
 
     switch (type) {
       case 'live':
+      case 'channel':
+        // "channel:" and "live:" ids both refer to the channels table.
         final q = _db.select(_db.channels)..where((c) => c.id.equals(id));
         final ch = await q.getSingleOrNull();
-        if (ch == null) return null;
+        if (ch == null) {
+          debugPrint(
+              '[HomeScreen] _resolveContentItem: unresolved contentId "$contentId"');
+          return null;
+        }
         return ContinueWatchingItem(
           title: ch.name,
           imageUrl: ch.logo,
@@ -836,10 +882,35 @@ class HomeScreenState extends State<HomeScreen> {
           ),
         );
 
+      case 'radio':
+        final rq = _db.select(_db.radioStations)..where((r) => r.id.equals(id));
+        final radio = await rq.getSingleOrNull();
+        if (radio == null) {
+          debugPrint(
+              '[HomeScreen] _resolveContentItem: unresolved contentId "$contentId"');
+          return null;
+        }
+        return ContinueWatchingItem(
+          title: radio.name,
+          imageUrl: radio.logo,
+          progress: progressFraction,
+          onTap: () => _navigateToDetail(
+            id: radio.id,
+            title: radio.name,
+            imageUrl: radio.logo,
+            url: radio.url,
+            contentType: 'radio',
+          ),
+        );
+
       case 'vod':
         final q = _db.select(_db.vodItems)..where((v) => v.id.equals(id));
         final vod = await q.getSingleOrNull();
-        if (vod == null) return null;
+        if (vod == null) {
+          debugPrint(
+              '[HomeScreen] _resolveContentItem: unresolved contentId "$contentId"');
+          return null;
+        }
         return ContinueWatchingItem(
           title: vod.title,
           imageUrl: vod.poster,
@@ -857,7 +928,11 @@ class HomeScreenState extends State<HomeScreen> {
       case 'episode':
         final q = _db.select(_db.episodes)..where((e) => e.id.equals(id));
         final ep = await q.getSingleOrNull();
-        if (ep == null) return null;
+        if (ep == null) {
+          debugPrint(
+              '[HomeScreen] _resolveContentItem: unresolved contentId "$contentId"');
+          return null;
+        }
 
         // Resolve the series title for the subtitle.
         final sq = _db.select(_db.tvSeries)
@@ -881,6 +956,8 @@ class HomeScreenState extends State<HomeScreen> {
         );
 
       default:
+        debugPrint(
+            '[HomeScreen] _resolveContentItem: unresolved contentId "$contentId"');
         return null;
     }
   }
@@ -1077,9 +1154,18 @@ class HomeScreenState extends State<HomeScreen> {
             tooltip: 'Settings',
           ),
           GestureDetector(
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const ProfileSwitcherScreen()),
-            ),
+            onTap: () {
+              Navigator.of(context)
+                  .push(
+                MaterialPageRoute(builder: (_) => const ProfileSwitcherScreen()),
+              )
+                  .then((_) {
+                // Reload when returning — the active profile (and its
+                // playlist scope) may have changed.
+                _loadActiveProfileInitials();
+                _loadContent();
+              });
+            },
             child: CircleAvatar(
               radius: 16,
               backgroundColor: AppColors.accentPrimary,

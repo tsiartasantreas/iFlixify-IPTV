@@ -46,12 +46,39 @@ class ProfileManager {
   }
 
   /// Get the currently active profile.
+  ///
+  /// Never throws: if multiple rows are flagged active (a sync artifact),
+  /// deterministically picks the newest and self-heals the others. If no row
+  /// is active, activates the newest one.
   Future<UserProfile?> getActiveProfile() async {
-    final query = _db.select(_db.userProfiles)
-      ..where((t) => t.isActive.equals(true));
-    final profile = await query.getSingleOrNull();
-    _cachedActiveProfileId = profile?.id;
-    return profile;
+    final profiles = await _db.select(_db.userProfiles).get();
+    if (profiles.isEmpty) return null;
+
+    // Prefer the active one; if multiple are active (sync artifact), pick
+    // the newest.
+    final active = profiles.where((p) => p.isActive).toList();
+    if (active.length == 1) {
+      _cachedActiveProfileId = active.first.id;
+      return active.first;
+    }
+    if (active.length > 1) {
+      active.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      // Self-heal: deactivate all but the newest active one.
+      for (final p in active.skip(1)) {
+        await (_db.update(_db.userProfiles)..where((t) => t.id.equals(p.id)))
+            .write(const UserProfilesCompanion(isActive: drift.Value(false)));
+      }
+      _cachedActiveProfileId = active.first.id;
+      return active.first;
+    }
+
+    // None active: activate the newest and return it.
+    profiles.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    final fallback = profiles.first;
+    await (_db.update(_db.userProfiles)..where((t) => t.id.equals(fallback.id)))
+        .write(const UserProfilesCompanion(isActive: drift.Value(true)));
+    _cachedActiveProfileId = fallback.id;
+    return fallback;
   }
 
   /// Create a new profile. If it's the first profile, it becomes active.
@@ -78,15 +105,19 @@ class ProfileManager {
 
   /// Switch the active profile.
   Future<void> switchProfile(int profileId) async {
-    // Deactivate all profiles
-    await (_db.update(_db.userProfiles)
-      ..where((t) => t.isActive.equals(true)))
-        .write(const UserProfilesCompanion(isActive: drift.Value(false)));
+    // Deactivate all + activate one atomically so an interrupted switch can
+    // never leave the DB with zero (or multiple) active profiles.
+    await _db.transaction(() async {
+      // Deactivate all profiles
+      await (_db.update(_db.userProfiles)
+        ..where((t) => t.isActive.equals(true)))
+          .write(const UserProfilesCompanion(isActive: drift.Value(false)));
 
-    // Activate the selected profile
-    await (_db.update(_db.userProfiles)
-      ..where((t) => t.id.equals(profileId)))
-        .write(const UserProfilesCompanion(isActive: drift.Value(true)));
+      // Activate the selected profile
+      await (_db.update(_db.userProfiles)
+        ..where((t) => t.id.equals(profileId)))
+          .write(const UserProfilesCompanion(isActive: drift.Value(true)));
+    });
 
     _cachedActiveProfileId = profileId;
 
@@ -211,11 +242,17 @@ class ProfileManager {
       final localProfiles = await getProfiles();
       final localById = {for (final p in localProfiles) p.id: p};
 
+      int? cloudActiveId;
+      int? newestId;
+      DateTime? newestCreatedAt;
+
       for (final cloud in cloudProfiles) {
         final profileId = cloud['profile_id'] as int;
         final displayName = cloud['display_name'] as String? ?? 'User';
         final avatarColor = _hexToColor(cloud['avatar_color'] as String? ?? '#E50914');
         final isActive = cloud['is_active'] as bool? ?? false;
+        final createdAt =
+            DateTime.tryParse(cloud['created_at'] as String? ?? '') ?? DateTime.now();
 
         if (localById.containsKey(profileId)) {
           // Update existing local profile.
@@ -227,16 +264,40 @@ class ProfileManager {
                 isActive: drift.Value(isActive),
               ));
         } else {
-          // Insert new profile from cloud.
+          // Insert new profile from cloud, keyed by the cloud profile_id so
+          // the merge-by-id logic (local id == cloud profile_id) holds across
+          // future syncs.
           await _db.into(_db.userProfiles).insert(
             UserProfilesCompanion.insert(
+              id: drift.Value(profileId),
               displayName: displayName,
               avatarColor: avatarColor,
-              createdAt: DateTime.tryParse(cloud['created_at'] as String? ?? '') ?? DateTime.now(),
+              createdAt: createdAt,
               isActive: drift.Value(isActive),
             ),
           );
         }
+
+        if (isActive) cloudActiveId = profileId;
+        if (newestCreatedAt == null || createdAt.isAfter(newestCreatedAt)) {
+          newestCreatedAt = createdAt;
+          newestId = profileId;
+        }
+      }
+
+      // Enforce a single active profile: deactivate ALL rows, then activate
+      // exactly one (the cloud row flagged active; if none flagged, the
+      // newest). This prevents the multi-active state that breaks
+      // getActiveProfile().
+      await (_db.update(_db.userProfiles)
+            ..where((t) => t.isActive.equals(true)))
+          .write(const UserProfilesCompanion(isActive: drift.Value(false)));
+
+      final activeId = cloudActiveId ?? newestId;
+      if (activeId != null) {
+        await (_db.update(_db.userProfiles)..where((t) => t.id.equals(activeId)))
+            .write(const UserProfilesCompanion(isActive: drift.Value(true)));
+        _cachedActiveProfileId = activeId;
       }
 
       // Refresh cache after sync.

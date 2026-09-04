@@ -68,7 +68,7 @@ class WatchProgressService {
 
   /// Saves playback [positionMs] for [contentId].
   ///
-  /// If the item was already watched past 90% of [durationMs] the entry is
+  /// If the item was already watched past 95% of [durationMs] the entry is
   /// cleared instead (treated as completed).
   Future<void> saveProgress(
     String contentId,
@@ -79,8 +79,8 @@ class WatchProgressService {
 
     final scopedId = _scopedId(contentId);
 
-    // Treat >= 90% watched as "completed" — remove from continue watching.
-    if (positionMs >= durationMs * 0.9) {
+    // Treat >= 95% watched as "completed" — remove from continue watching.
+    if (positionMs >= durationMs * 0.95) {
       await clearProgress(contentId);
       return;
     }
@@ -114,7 +114,7 @@ class WatchProgressService {
 
   /// Returns up to [limit] items with saved progress, most recently updated.
   ///
-  /// Items that are < 5% played are excluded (likely accidental taps).
+  /// Items not yet started (0% played) are excluded.
   ///
   /// Includes both profile-scoped entries (prefix `"<profileId>:"`) and
   /// legacy entries (no prefix) so that data saved before the profile-scoping
@@ -126,8 +126,9 @@ class WatchProgressService {
     final prefix = '$profileId:';
     final allEntries = await _database.select(_database.watchProgressEntry).get();
     // Filter in Dart: keep items belonging to the active profile (or legacy
-    // items with no profile prefix), where position >= 5% of duration
-    // (exclude accidental taps) and position < 90% (exclude completed).
+    // items with no profile prefix), where position > 0 and position < 95%
+    // (exclude completed). Accidental taps are guarded by the 30 s minimum
+    // resume gate in the player/detail screens.
     final filtered = allEntries.where((e) {
       // Accept entries scoped to the active profile.
       final isScoped = e.contentId.startsWith(prefix);
@@ -138,17 +139,21 @@ class WatchProgressService {
       if (!isScoped && !isLegacy) return false;
       if (e.durationMs <= 0) return false;
       final fraction = e.positionMs / e.durationMs;
-      return fraction >= 0.05 && fraction < 0.9;
+      return fraction > 0 && fraction < 0.95;
     }).toList()
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     return filtered.take(limit).toList();
   }
 
   /// Clears saved progress for [contentId].
+  ///
+  /// Deletes BOTH the profile-scoped row and the raw (legacy, unscoped) row
+  /// so that completion cannot be "resurrected" by [getProgress]'s legacy
+  /// fallback.
   Future<void> clearProgress(String contentId) async {
-    final scopedId = _scopedId(contentId);
+    final scoped = _scopedId(contentId);
     await (_database.delete(_database.watchProgressEntry)
-          ..where((w) => w.contentId.equals(scopedId)))
+          ..where((w) => w.contentId.equals(scoped) | w.contentId.equals(contentId)))
         .go();
   }
 

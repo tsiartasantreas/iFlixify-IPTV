@@ -387,9 +387,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
             title: 'Switch Profile',
             subtitle: 'Manage user profiles',
             onTap: () {
-              Navigator.of(context).push(
+              Navigator.of(context)
+                  .push(
                 MaterialPageRoute(builder: (_) => const ProfileSwitcherScreen()),
-              );
+              )
+                  .then((_) {
+                // Reload when returning — the active profile may have changed.
+                _loadSettings();
+              });
             },
           ),
 

@@ -176,11 +176,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
             });
           }
         });
-        // Cancel after 10 seconds to avoid leaks.
-        Future.delayed(const Duration(seconds: 10), () {
-          _durationSub?.cancel();
-          _durationSub = null;
-        });
+        // Note: the subscription is NOT cancelled on a fixed timer — slow
+        // streams can take longer than 10 s to report a duration, and
+        // cancelling early would strand the pending resume. It is cancelled
+        // once the resume succeeds (or is abandoned) in [_tryResume], and
+        // always in dispose().
       }
       // Preload the next episode (for series episodes) for the Up Next overlay.
       final id = widget.contentId;
@@ -272,6 +272,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
     // The seek took effect once playback reaches (near) the target.
     if (ctrl.position + const Duration(seconds: 5) >= target) {
       _resumePending = false;
+      // Resume verified — the duration listener is no longer needed.
+      _durationSub?.cancel();
+      _durationSub = null;
       return;
     }
 
@@ -279,6 +282,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
     // simply play from the start.
     if (_resumeAttempts >= 30) {
       _resumePending = false;
+      // Resume abandoned — the duration listener is no longer needed.
+      _durationSub?.cancel();
+      _durationSub = null;
       return;
     }
 

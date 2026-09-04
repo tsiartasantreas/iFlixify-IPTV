@@ -162,7 +162,18 @@ class _OfflineScreenState extends State<OfflineScreen> {
 
     if (!mounted) return;
     final controller = PlayerController();
-    controller.open(item.filePath);
+    // Don't autoplay when resuming from a saved position — the player
+    // screen seeks first (mirrors DetailScreen's open pattern).
+    await controller.open(
+      item.filePath,
+      autoPlay: startPosition == null || startPosition <= Duration.zero,
+    );
+
+    if (!mounted) {
+      // The screen went away while opening — release the controller.
+      controller.dispose();
+      return;
+    }
 
     final playerScreen = _isTv
         ? TvPlayerScreen(

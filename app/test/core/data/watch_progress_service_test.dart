@@ -62,7 +62,8 @@ void main() {
 
       final entry = await service.getProgress('vod:1');
       expect(entry, isNotNull);
-      expect(entry!.contentId, 'vod:1');
+      // Stored under the profile-scoped id ('default' profile in tests).
+      expect(entry!.contentId, 'default:vod:1');
       expect(entry.positionMs, 5000);
       expect(entry.durationMs, 60000);
     });
@@ -75,8 +76,8 @@ void main() {
       expect(entry!.positionMs, 10000);
     });
 
-    test('clears progress when >= 90% watched (completed)', () async {
-      await service.saveProgress('vod:1', 54000, 60000); // 90%
+    test('clears progress when >= 95% watched (completed)', () async {
+      await service.saveProgress('vod:1', 57000, 60000); // 95%
       final entry = await service.getProgress('vod:1');
       expect(entry, isNull);
     });
@@ -99,9 +100,9 @@ void main() {
       expect(entry, isNull);
     });
 
-    test('saves progress just below 90% threshold', () async {
-      // 89.9% should still be saved.
-      final pos = (60000 * 0.899).toInt(); // 53940
+    test('saves progress just below 95% threshold', () async {
+      // 94.9% should still be saved.
+      final pos = (60000 * 0.949).toInt(); // 56940
       await service.saveProgress('vod:1', pos, 60000);
       final entry = await service.getProgress('vod:1');
       expect(entry, isNotNull);
@@ -123,7 +124,8 @@ void main() {
       await service.saveProgress('live:5', 1234, 9999);
       final entry = await service.getProgress('live:5');
       expect(entry, isNotNull);
-      expect(entry!.contentId, 'live:5');
+      // Stored under the profile-scoped id ('default' profile in tests).
+      expect(entry!.contentId, 'default:live:5');
       expect(entry.positionMs, 1234);
       expect(entry.durationMs, 9999);
     });
@@ -204,15 +206,16 @@ void main() {
       expect(items.length, 5);
     });
 
-    test('excludes items with < 5% progress', () async {
-      // 4% progress -- should be excluded.
-      await service.saveProgress('vod:1', 2400, 60000);
-      // 10% progress -- should be included.
+    test('includes barely-started items (any progress > 0)', () async {
+      // 1% progress -- now included (floor is fraction > 0, not >= 5%).
+      await service.saveProgress('vod:1', 600, 60000);
+      // 10% progress -- also included.
       await service.saveProgress('vod:2', 6000, 60000);
 
       final items = await service.getContinueWatching();
-      expect(items.length, 1);
-      expect(items[0].contentId, 'vod:2');
+      expect(items.length, 2);
+      final contentIds = items.map((i) => i.contentId).toSet();
+      expect(contentIds, containsAll(['default:vod:1', 'default:vod:2']));
     });
 
     test('includes items at exactly 5% progress', () async {
@@ -223,8 +226,8 @@ void main() {
 
     test('excludes completed items (cleared by saveProgress)', () async {
       await service.saveProgress('vod:1', 5000, 60000);
-      // Mark as completed (>= 90%).
-      await service.saveProgress('vod:1', 55000, 60000);
+      // Mark as completed (>= 95%).
+      await service.saveProgress('vod:1', 57000, 60000);
 
       final items = await service.getContinueWatching();
       expect(items, isEmpty);
@@ -238,8 +241,13 @@ void main() {
       final items = await service.getContinueWatching();
       expect(items.length, 3);
 
+      // Rows are stored under the profile-scoped id ('default' in tests) and
+      // getContinueWatching returns the stored (scoped) contentId.
       final contentIds = items.map((i) => i.contentId).toSet();
-      expect(contentIds, containsAll(['live:1', 'vod:2', 'episode:3']));
+      expect(
+        contentIds,
+        containsAll(['default:live:1', 'default:vod:2', 'default:episode:3']),
+      );
     });
   });
 
