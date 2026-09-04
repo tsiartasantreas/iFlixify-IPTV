@@ -1,9 +1,17 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:path_provider/path_provider.dart';
+// wakelock_plus is a transitive dependency (via media_kit_video); it is used
+// directly here for keep-screen-on during playback. The ignore silences the
+// depend_on_referenced_packages lint until it is promoted to a direct dep.
+// ignore: depend_on_referenced_packages
+import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../core/data/database.dart';
 import '../../core/data/watch_progress_service.dart';
@@ -14,6 +22,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/data/offline_download_service.dart';
 import '../../core/widgets/favorite_button.dart';
 import 'widgets/player_overlay_widgets.dart';
+import 'widgets/tv_settings_dialog.dart';
 
 /// Full-screen TV / Fire TV player with D-pad controls and advanced overlays.
 ///
@@ -110,10 +119,39 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
   double _subtitleOffset = 0.0;
   bool _subtitleOutline = true;
 
+  // -- Long-press OK => temporary 2x speed ------------------------------------
+  /// Pending timer that fires the temporary 2x boost while OK is held.
+  Timer? _longPressTimer;
+  bool _selectKeyDown = false;
+  bool _longPressFired = false;
+  bool _tempBoostActive = false;
+  double _rateBeforeTempBoost = 1.0;
+
+  // -- Sleep timer -------------------------------------------------------------
+  Timer? _sleepTicker;
+  Duration _sleepRemaining = Duration.zero;
+
+  // -- Focus plumbing for D-pad navigation -------------------------------------
+  /// Enclosing (non-focusable) focus nodes for the top bar and the bottom
+  /// action row; used to detect which overlay region the focus is in and to
+  /// return focus to the video surface.
+  final FocusNode _topBarNode = FocusNode();
+  final FocusNode _bottomBarNode = FocusNode();
+
+  static final Set<LogicalKeyboardKey> _activateKeys = {
+    LogicalKeyboardKey.select,
+    LogicalKeyboardKey.enter,
+    LogicalKeyboardKey.space,
+    LogicalKeyboardKey.gameButtonA,
+  };
+
   @override
   void initState() {
     super.initState();
     _startHideTimer();
+
+    // Keep the screen awake while the player is open.
+    WakelockPlus.enable();
 
     if (_recordsProgress) {
       _watchService = WatchProgressService(database: AppDatabase());
@@ -184,6 +222,11 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
   @override
   void dispose() {
     _hideTimer?.cancel();
+    _longPressTimer?.cancel();
+    _sleepTicker?.cancel();
+    _topBarNode.dispose();
+    _bottomBarNode.dispose();
+    WakelockPlus.disable();
     _durationSub?.cancel();
     if (_recordsProgress) {
       _progressTimer?.cancel();
@@ -346,19 +389,71 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
   // ---------------------------------------------------------------------------
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
+    final ctrl = widget.controller;
+    final primary = FocusManager.instance.primaryFocus;
+    final onSurface = primary == node;
+
+    // -- Focus is on an overlay control (top bar / bottom bar) ----------------
+    // Let the control's own handlers and the default focus traversal do the
+    // work; only step in to return focus to the video surface and to keep
+    // Back/Escape exiting the player.
+    if (!onSurface) {
+      if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+        return KeyEventResult.ignored;
+      }
+      switch (event.logicalKey) {
+        case LogicalKeyboardKey.arrowDown:
+          if (primary!.ancestors.contains(_bottomBarNode)) {
+            node.requestFocus();
+            return KeyEventResult.handled;
+          }
+          return KeyEventResult.ignored;
+
+        case LogicalKeyboardKey.arrowUp:
+          if (primary!.ancestors.contains(_topBarNode)) {
+            node.requestFocus();
+            return KeyEventResult.handled;
+          }
+          return KeyEventResult.ignored;
+
+        // Back / Escape => exit player (same as on the video surface).
+        case LogicalKeyboardKey.goBack:
+        case LogicalKeyboardKey.escape:
+          _exitPlayer();
+          return KeyEventResult.handled;
+
+        default:
+          return KeyEventResult.ignored;
+      }
+    }
+
+    // -- Focus is on the video surface ----------------------------------------
+
+    // OK released: either end the temporary 2x boost, or (quick press) toggle
+    // play/pause.
+    if (event is KeyUpEvent) {
+      if (_activateKeys.contains(event.logicalKey)) {
+        _onSurfaceSelectReleased();
+        return KeyEventResult.handled;
+      }
+      return KeyEventResult.ignored;
+    }
+
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
     }
 
-    final ctrl = widget.controller;
-
     switch (event.logicalKey) {
-      // Center / Select / Enter / Space => toggle play/pause
+      // Center / Select / Enter / Space / Gamepad A
+      // Quick press => toggle play/pause; held >= 600 ms => temporary 2x.
       case LogicalKeyboardKey.select:
       case LogicalKeyboardKey.enter:
       case LogicalKeyboardKey.space:
-        ctrl.togglePlay();
-        _showControls();
+      case LogicalKeyboardKey.gameButtonA:
+        if (event is KeyDownEvent) {
+          _onSurfaceSelectPressed();
+        }
+        // Swallow key repeats while OK is held.
         return KeyEventResult.handled;
 
       // Left arrow => seek backward 10 s
@@ -391,6 +486,152 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
 
       default:
         return KeyEventResult.ignored;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Long-press OK => temporary 2x speed
+  // ---------------------------------------------------------------------------
+
+  /// Called on OK KeyDownEvent on the video surface. Starts the 600 ms
+  /// long-press timer; a quick release before it fires toggles play/pause.
+  void _onSurfaceSelectPressed() {
+    _selectKeyDown = true;
+    _longPressFired = false;
+    _longPressTimer?.cancel();
+    _longPressTimer = Timer(const Duration(milliseconds: 600), () {
+      if (!_selectKeyDown || !mounted) return;
+      _longPressFired = true;
+      _rateBeforeTempBoost = widget.controller.rate;
+      _tempBoostActive = true;
+      widget.controller.setRate(2.0);
+      if (mounted) setState(() {});
+    });
+  }
+
+  /// Called on OK KeyUpEvent on the video surface.
+  void _onSurfaceSelectReleased() {
+    if (!_selectKeyDown) return;
+    _selectKeyDown = false;
+    _longPressTimer?.cancel();
+    _longPressTimer = null;
+
+    if (_longPressFired) {
+      // Long press fired: restore the previous playback rate.
+      _longPressFired = false;
+      if (_tempBoostActive) {
+        _tempBoostActive = false;
+        widget.controller.setRate(_rateBeforeTempBoost);
+        if (mounted) setState(() {});
+      }
+      return;
+    }
+
+    // Quick press: toggle play/pause (original behavior).
+    widget.controller.togglePlay();
+    _showControls();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Sleep timer
+  // ---------------------------------------------------------------------------
+
+  /// Starts (or cancels, when [minutes] is 0) the sleep timer. When it hits
+  /// zero, playback is paused and a toast is shown.
+  void _setSleepTimer(int minutes) {
+    _sleepTicker?.cancel();
+    _sleepTicker = null;
+    if (minutes <= 0) {
+      if (mounted) setState(() => _sleepRemaining = Duration.zero);
+      return;
+    }
+    if (mounted) setState(() => _sleepRemaining = Duration(minutes: minutes));
+    _sleepTicker = Timer.periodic(const Duration(seconds: 1), (ticker) {
+      if (!mounted) {
+        ticker.cancel();
+        return;
+      }
+      setState(() {
+        _sleepRemaining -= const Duration(seconds: 1);
+      });
+      if (_sleepRemaining <= Duration.zero) {
+        ticker.cancel();
+        _sleepTicker = null;
+        setState(() => _sleepRemaining = Duration.zero);
+        widget.controller.pause();
+        _showToast('Sleep timer finished — playback paused');
+      }
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Screenshot
+  // ---------------------------------------------------------------------------
+
+  Future<void> _takeScreenshot() async {
+    _showControls();
+    final bytes = await widget.controller.takeScreenshot();
+    if (!mounted) return;
+    if (bytes == null || bytes.isEmpty) {
+      _showToast('Screenshot failed');
+      return;
+    }
+    try {
+      final dir = await getTemporaryDirectory();
+      final file = File(
+        '${dir.path}/screenshot_${DateTime.now().millisecondsSinceEpoch}.png',
+      );
+      await file.writeAsBytes(bytes);
+      await Share.shareXFiles(
+        [XFile(file.path)],
+        text: widget.title.isEmpty ? null : widget.title,
+      );
+      if (!mounted) return;
+      _showToast('Screenshot saved');
+    } catch (_) {
+      // File writing / sharing unavailable — degrade gracefully.
+      if (!mounted) return;
+      _showToast('Screenshot captured (${bytes.length} bytes)');
+    }
+  }
+
+  void _showToast(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        duration: const Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Settings dialog
+  // ---------------------------------------------------------------------------
+
+  /// Opens the extended TV settings dialog, restoring focus to whatever was
+  /// focused before it opened (falls back to the video surface).
+  Future<void> _openSettingsDialog(TvSettingsTab initialTab) async {
+    _showControls();
+    final previousFocus = FocusManager.instance.primaryFocus;
+    await showTvSettingsDialog(
+      context,
+      controller: widget.controller,
+      initialTab: initialTab,
+      subtitleFontSize: _subtitleFontSize,
+      subtitleBgOpacity: _subtitleBgOpacity,
+      subtitleOffset: _subtitleOffset,
+      subtitleOutline: _subtitleOutline,
+      onSubtitleFontSize: _setSubtitleFontSize,
+      onSubtitleBgOpacity: _setSubtitleBgOpacity,
+      onSubtitleOffset: _setSubtitleOffset,
+      onSubtitleOutline: _setSubtitleOutline,
+      sleepRemaining: _sleepRemaining,
+      onSelectSleepTimer: _setSleepTimer,
+    );
+    if (mounted) {
+      (previousFocus ?? _focusNode).requestFocus();
+      _startHideTimer();
     }
   }
 
@@ -441,6 +682,19 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
                 ignoring: !_controlsVisible,
                 child: _buildControls(ctrl),
               ),
+
+              // -- Temporary 2x speed pill (long-press OK) --------------------
+              if (_tempBoostActive)
+                const Positioned(
+                  top: 16,
+                  left: 0,
+                  right: 0,
+                  child: IgnorePointer(
+                    child: Center(
+                      child: _TempSpeedPill(),
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
@@ -575,7 +829,22 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
         return Container(
           color: Colors.black45,
           child: const Center(
-            child: CircularProgressIndicator(color: AppColors.accentPrimary),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(
+                  color: AppColors.accentPrimary,
+                ),
+                SizedBox(height: 16),
+                Text(
+                  'Buffering…',
+                  style: TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 14,
+                  ),
+                ),
+              ],
+            ),
           ),
         );
       },
@@ -608,7 +877,13 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
           child: Column(
             children: [
               // -- Top: title + track buttons --------------------------------
-              _buildTopBar(ctrl),
+              Focus(
+                canRequestFocus: false,
+                focusNode: _topBarNode,
+                child: FocusTraversalGroup(
+                  child: _buildTopBar(ctrl),
+                ),
+              ),
 
               const Spacer(),
 
@@ -617,6 +892,15 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
 
               // -- Bottom: progress bar + timestamps + D-pad hints -----------
               _buildProgressBarArea(ctrl),
+
+              // -- Bottom action row: speed / seek / sleep --------------------
+              Focus(
+                canRequestFocus: false,
+                focusNode: _bottomBarNode,
+                child: FocusTraversalGroup(
+                  child: _buildBottomActionRow(ctrl),
+                ),
+              ),
               const SizedBox(height: 8),
               if (!widget.isLive) _buildDpadHints(),
               const SizedBox(height: 8),
@@ -641,6 +925,25 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
               category: widget.category,
               resolution: ctrl.videoResolution,
               contentType: widget.contentType,
+            ),
+          ),
+          // Screenshot button
+          Padding(
+            padding: const EdgeInsets.only(left: 8),
+            child: _TvIconButton(
+              icon: Icons.photo_camera,
+              tooltip: 'Screenshot',
+              onPressed: _takeScreenshot,
+            ),
+          ),
+          // Settings / playback speed button
+          Padding(
+            padding: const EdgeInsets.only(left: 8),
+            child: _TvIconButton(
+              icon: Icons.speed,
+              tooltip: 'Playback settings',
+              onPressed: () =>
+                  _openSettingsDialog(TvSettingsTab.playback),
             ),
           ),
           // Audio track button (only if multiple tracks)
@@ -694,14 +997,15 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
               return const SizedBox.shrink();
             },
           ),
-          // Subtitle settings button
+          // Subtitle settings button (opens the TV settings dialog)
           if (widget.contentId != null)
             Padding(
               padding: const EdgeInsets.only(left: 8),
               child: _TvIconButton(
                 icon: Icons.closed_caption,
                 tooltip: 'Subtitle settings',
-                onPressed: _showSubtitleSettings,
+                onPressed: () =>
+                    _openSettingsDialog(TvSettingsTab.subtitles),
               ),
             ),
           // Favorite button
@@ -784,6 +1088,50 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
           onSeek: widget.isLive ? null : ctrl.seekFractionally,
         );
       },
+    );
+  }
+
+  /// Bottom action row: speed chip, -30s/+30s seek, sleep-timer indicator.
+  Widget _buildBottomActionRow(PlayerController ctrl) {
+    final sleepActive = _sleepRemaining > Duration.zero;
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          TvFocusChip(
+            label: formatTvRate(ctrl.rate),
+            accentWhenActive: (ctrl.rate - 1.0).abs() > 0.01,
+            onActivated: () => _openSettingsDialog(TvSettingsTab.playback),
+          ),
+          const SizedBox(width: 12),
+          TvFocusChip(
+            label: '-30s',
+            onActivated: () {
+              ctrl.seekBy(const Duration(seconds: -30));
+              _showControls();
+            },
+          ),
+          const SizedBox(width: 12),
+          TvFocusChip(
+            label: '+30s',
+            onActivated: () {
+              ctrl.seekBy(const Duration(seconds: 30));
+              _showControls();
+            },
+          ),
+          if (sleepActive) ...[
+            const SizedBox(width: 12),
+            TvFocusChip(
+              label: 'Sleep '
+                  '${_sleepRemaining.inMinutes.toString().padLeft(2, '0')}:'
+                  '${_sleepRemaining.inSeconds.remainder(60).toString().padLeft(2, '0')}',
+              accentWhenActive: true,
+              onActivated: () => _openSettingsDialog(TvSettingsTab.playback),
+            ),
+          ],
+        ],
+      ),
     );
   }
 
@@ -875,186 +1223,74 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
     setState(() {});
   }
 
-  void _showSubtitleSettings() {
-    showDialog(
-      context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              backgroundColor: AppColors.bgSurface,
-              title: const Text(
-                'Subtitle Settings',
-                style: TextStyle(color: AppColors.textPrimary),
-              ),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Font Size: ${_subtitleFontSize.round()}px',
-                    style: const TextStyle(
-                      color: AppColors.textSecondary,
-                      fontSize: 14,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      _tvFontSizeButton(14, setDialogState),
-                      const SizedBox(width: 8),
-                      _tvFontSizeButton(18, setDialogState),
-                      const SizedBox(width: 8),
-                      _tvFontSizeButton(24, setDialogState),
-                      const SizedBox(width: 8),
-                      _tvFontSizeButton(32, setDialogState),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-                  Text(
-                    'Background Opacity: ${(_subtitleBgOpacity * 100).round()}%',
-                    style: const TextStyle(
-                      color: AppColors.textSecondary,
-                      fontSize: 14,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  SliderTheme(
-                    data: SliderThemeData(
-                      activeTrackColor: AppColors.accentPrimary,
-                      inactiveTrackColor: AppColors.bgSurface,
-                      thumbColor: AppColors.accentPrimary,
-                      overlayColor: AppColors.accentPrimary.withValues(alpha: 0.2),
-                    ),
-                    child: Slider(
-                      value: _subtitleBgOpacity,
-                      min: 0.0,
-                      max: 1.0,
-                      divisions: 10,
-                      onChanged: (val) async {
-                        setDialogState(() => _subtitleBgOpacity = val);
-                        setState(() => _subtitleBgOpacity = val);
-                        final prefs = await SharedPreferences.getInstance();
-                        await prefs.setDouble('subtitle_bg_opacity', val);
-                      },
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  // Subtitle vertical position
-                  const Text(
-                    'Vertical Position',
-                    style: TextStyle(
-                      color: AppColors.textSecondary,
-                      fontSize: 14,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      const Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-                      Expanded(
-                        child: SliderTheme(
-                          data: SliderThemeData(
-                            activeTrackColor: AppColors.accentPrimary,
-                            inactiveTrackColor: AppColors.bgSurface,
-                            thumbColor: AppColors.accentPrimary,
-                            overlayColor: AppColors.accentPrimary.withValues(alpha: 0.2),
-                          ),
-                          child: Slider(
-                            value: _subtitleOffset,
-                            min: -1.0,
-                            max: 1.0,
-                            divisions: 20,
-                            onChanged: (v) async {
-                              setDialogState(() => _subtitleOffset = v);
-                              setState(() => _subtitleOffset = v);
-                              _applySubtitlePosition(v);
-                              final prefs = await SharedPreferences.getInstance();
-                              await prefs.setDouble('subtitle_offset', v);
-                            },
-                          ),
-                        ),
-                      ),
-                      const Icon(Icons.arrow_drop_up, color: AppColors.textSecondary),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-                  // Subtitle outline toggle
-                  SwitchListTile(
-                    title: const Text('Text Outline', style: TextStyle(color: AppColors.textPrimary)),
-                    subtitle: const Text('Black outline around subtitle text', style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
-                    value: _subtitleOutline,
-                    onChanged: (v) async {
-                      setDialogState(() => _subtitleOutline = v);
-                      setState(() => _subtitleOutline = v);
-                      _applySubtitleStyle();
-                      final prefs = await SharedPreferences.getInstance();
-                      await prefs.setBool('subtitle_outline', v);
-                    },
-                    activeThumbColor: AppColors.accentPrimary,
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Styling will be applied when subtitle rendering is enabled.',
-                    style: TextStyle(
-                      color: AppColors.textSecondary,
-                      fontSize: 12,
-                      fontStyle: FontStyle.italic,
-                    ),
-                  ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  autofocus: true,
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text(
-                    'Done',
-                    style: TextStyle(color: AppColors.accentPrimary),
-                  ),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
+  // The subtitle styling controls live in the extended TV settings dialog
+  // (Subtitles tab, see widgets/tv_settings_dialog.dart). These setters mutate
+  // the screen state and persist to SharedPreferences, exactly like the old
+  // standalone dialog did; the `Video` ValueKey rebuilds with the new style.
+
+  Future<void> _setSubtitleFontSize(double size) async {
+    setState(() {
+      _subtitleFontSize = size;
+      _applySubtitleStyle();
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('subtitle_font_size', size);
   }
 
-  Widget _tvFontSizeButton(double size, StateSetter setDialogState) {
-    final isSelected = (_subtitleFontSize - size).abs() < 0.01;
-    return Expanded(
-      child: GestureDetector(
-        onTap: () async {
-          setDialogState(() => _subtitleFontSize = size);
-          setState(() => _subtitleFontSize = size);
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setDouble('subtitle_font_size', size);
-        },
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 10),
-          decoration: BoxDecoration(
-            color: isSelected
-                ? AppColors.accentPrimary
-                : AppColors.bgSurface,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: isSelected
-                  ? AppColors.accentPrimary
-                  : AppColors.textSecondary,
-            ),
-          ),
-          child: Text(
-            '${size.round()}',
-            textAlign: TextAlign.center,
+  Future<void> _setSubtitleBgOpacity(double opacity) async {
+    setState(() {
+      _subtitleBgOpacity = opacity;
+      _applySubtitleStyle();
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('subtitle_bg_opacity', opacity);
+  }
+
+  Future<void> _setSubtitleOffset(double offset) async {
+    setState(() {
+      _subtitleOffset = offset;
+      _applySubtitlePosition(offset);
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('subtitle_offset', offset);
+  }
+
+  Future<void> _setSubtitleOutline(bool outline) async {
+    setState(() {
+      _subtitleOutline = outline;
+      _applySubtitleStyle();
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('subtitle_outline', outline);
+  }
+}
+
+/// Accent pill shown while the long-press-OK temporary 2x boost is active.
+class _TempSpeedPill extends StatelessWidget {
+  const _TempSpeedPill();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.accentPrimary.withValues(alpha: 0.85),
+        borderRadius: BorderRadius.circular(24),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.fast_forward, color: AppColors.textPrimary, size: 18),
+          SizedBox(width: 8),
+          Text(
+            '2× Speed',
             style: TextStyle(
-              color:
-                  isSelected ? AppColors.textPrimary : AppColors.textSecondary,
-              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+              color: AppColors.textPrimary,
+              fontSize: 15,
+              fontWeight: FontWeight.bold,
             ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -1080,7 +1316,9 @@ class _TvIconButton extends StatelessWidget {
       onKeyEvent: (node, event) {
         if (event is KeyDownEvent &&
             (event.logicalKey == LogicalKeyboardKey.select ||
-                event.logicalKey == LogicalKeyboardKey.enter)) {
+                event.logicalKey == LogicalKeyboardKey.enter ||
+                event.logicalKey == LogicalKeyboardKey.space ||
+                event.logicalKey == LogicalKeyboardKey.gameButtonA)) {
           onPressed();
           return KeyEventResult.handled;
         }

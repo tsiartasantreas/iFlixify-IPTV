@@ -550,6 +550,149 @@ class PlayerProgressBar extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
+// Quick-seek pill + speed chip (bottom control bar)
+// ---------------------------------------------------------------------------
+
+/// Compact rounded pill used for the quick-seek actions (`-30s`, `+10s`, ...)
+/// in the bottom control bar.
+class QuickSeekButton extends StatelessWidget {
+  const QuickSeekButton({
+    super.key,
+    required this.label,
+    required this.onPressed,
+  });
+
+  final String label;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onPressed,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: AppColors.bgSurface.withValues(alpha: 0.7),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(
+            color: AppColors.textPrimary,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Chip showing the current playback speed. Tinted with the accent color
+/// when the rate differs from 1.0. Tapping opens a speed selector.
+class SpeedChip extends StatelessWidget {
+  const SpeedChip({
+    super.key,
+    required this.rate,
+    required this.onTap,
+  });
+
+  final double rate;
+  final VoidCallback onTap;
+
+  bool get _isDefault => (rate - 1.0).abs() < 0.001;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: _isDefault
+              ? AppColors.bgSurface.withValues(alpha: 0.7)
+              : AppColors.accentPrimary,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Text(
+          '${rate.toStringAsFixed(rate % 1 == 0 ? 1 : 2)}×',
+          style: const TextStyle(
+            color: AppColors.textPrimary,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Settings sheet chips
+// ---------------------------------------------------------------------------
+
+/// A single selectable chip used inside the player settings bottom sheet
+/// (aspect ratio, rotation, zoom fit, buffer size, speed, sleep timer...).
+class SettingsChip extends StatelessWidget {
+  const SettingsChip({
+    super.key,
+    required this.label,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? AppColors.accentPrimary
+              : AppColors.bgSurface,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: isSelected
+                ? AppColors.accentPrimary
+                : AppColors.textSecondary.withValues(alpha: 0.4),
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: isSelected
+                ? AppColors.textPrimary
+                : AppColors.textSecondary,
+            fontSize: 13,
+            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A horizontally scrollable row of [SettingsChip]s.
+class SettingsChipRow extends StatelessWidget {
+  const SettingsChipRow({super.key, required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(children: children),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

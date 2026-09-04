@@ -1,9 +1,15 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'package:floating/floating.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../core/data/database.dart';
 import '../../core/data/watch_progress_service.dart';
@@ -105,6 +111,22 @@ class _PlayerScreenState extends State<PlayerScreen> {
   bool _showRightSeekIcon = false;
   Timer? _seekIconTimer;
 
+  // -- Long-press 2x speed (YouTube-style) ------------------------------------
+  double _rateBeforeBoost = 1.0;
+  bool _longPressActive = false;
+  bool _showSpeedPill = false;
+
+  // -- Playback settings -------------------------------------------------------
+  BoxFit _videoFit = BoxFit.contain;
+  Timer? _sleepTimer;
+  Timer? _sleepCountdown;
+  DateTime? _sleepEndsAt;
+
+  // -- Picture-in-Picture (Android, guarded) -----------------------------------
+  bool _pipAvailable = false;
+  bool _isInPip = false;
+  StreamSubscription<PiPStatus>? _pipStatusSub;
+
   // -- Subtitle preferences --------------------------------------------------
   double _subtitleFontSize = 18.0;
   double _subtitleBgOpacity = 0.6;
@@ -135,6 +157,15 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void initState() {
     super.initState();
     _startHideTimer();
+
+    // Keep the screen on and lock to landscape while the player is open.
+    WakelockPlus.enable();
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
+
+    _probePipSupport();
 
     if (_recordsProgress) {
       _watchService = WatchProgressService(database: AppDatabase());
@@ -217,6 +248,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _singleTapTimer?.cancel();
     _seekIconTimer?.cancel();
     _durationSub?.cancel();
+    _sleepTimer?.cancel();
+    _sleepCountdown?.cancel();
+    _pipStatusSub?.cancel();
+    WakelockPlus.disable();
+    SystemChrome.setPreferredOrientations(DeviceOrientation.values);
     if (_recordsProgress) {
       _progressTimer?.cancel();
       widget.controller.removeListener(_onPlayerChanged);
@@ -392,6 +428,150 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   // ---------------------------------------------------------------------------
+  // Picture-in-Picture (Android only, guarded)
+  // ---------------------------------------------------------------------------
+
+  /// One-time PiP capability probe. On any failure the PiP button stays
+  /// hidden and the feature is entirely inert.
+  Future<void> _probePipSupport() async {
+    // The floating package only implements PiP on Android; probing elsewhere
+    // would just throw, so hide the button entirely on other platforms.
+    if (defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      final available = await Floating().isPipAvailable;
+      if (!mounted) return;
+      setState(() => _pipAvailable = available);
+      if (!available) return;
+      // Track PiP mode so all overlays can be hidden while active. The video
+      // widget (and its controller) stays fully mounted during PiP.
+      _pipStatusSub = Floating().pipStatusStream.listen((status) {
+        if (!mounted) return;
+        setState(() => _isInPip = status == PiPStatus.enabled);
+      });
+    } catch (_) {
+      // PiP unavailable on this device — the button stays hidden.
+      if (mounted) setState(() => _pipAvailable = false);
+    }
+  }
+
+  Future<void> _enterPip() async {
+    try {
+      await Floating().enable(const ImmediatePiP());
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Picture-in-Picture unavailable'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Screenshot
+  // ---------------------------------------------------------------------------
+
+  /// Captures the current frame and opens the system share sheet with the
+  /// PNG. Never throws — falls back to a toast on failure.
+  Future<void> _takeScreenshot() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final bytes = await widget.controller.takeScreenshot();
+    if (bytes == null) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Screenshot failed'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+    try {
+      final dir = await getTemporaryDirectory();
+      final file = File(
+        '${dir.path}/screenshot_${DateTime.now().millisecondsSinceEpoch}.png',
+      );
+      await file.writeAsBytes(bytes);
+      await Share.shareXFiles(
+        [XFile(file.path)],
+        text: widget.title.isEmpty ? null : widget.title,
+      );
+    } catch (_) {
+      // Sharing failed but the capture succeeded — the frame was written to
+      // the temporary directory. Never crash the player over sharing.
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Screenshot saved'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Sleep timer
+  // ---------------------------------------------------------------------------
+
+  void _setSleepTimer(int minutes) {
+    _sleepTimer?.cancel();
+    _sleepCountdown?.cancel();
+    setState(() => _sleepEndsAt = null);
+    if (minutes <= 0) return;
+    _sleepEndsAt = DateTime.now().add(Duration(minutes: minutes));
+    _sleepTimer = Timer(Duration(minutes: minutes), _onSleepTimerEnd);
+    _sleepCountdown = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {}); // Refresh the remaining-time display.
+    });
+  }
+
+  void _onSleepTimerEnd() {
+    _sleepCountdown?.cancel();
+    _sleepCountdown = null;
+    if (!mounted) return;
+    setState(() => _sleepEndsAt = null);
+    widget.controller.pause();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Sleep timer ended'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  /// Formatted remaining sleep-timer time, or null when no timer is active.
+  String? get _sleepRemainingText {
+    final endsAt = _sleepEndsAt;
+    if (endsAt == null) return null;
+    final remaining = endsAt.difference(DateTime.now());
+    if (remaining <= Duration.zero) return null;
+    return '${remaining.inMinutes}:${(remaining.inSeconds % 60).toString().padLeft(2, '0')}';
+  }
+
+  // ---------------------------------------------------------------------------
+  // Long-press 2x speed
+  // ---------------------------------------------------------------------------
+
+  void _onLongPressStart(LongPressStartDetails details) {
+    _singleTapTimer?.cancel();
+    _rateBeforeBoost = widget.controller.rate;
+    widget.controller.setRate(2.0);
+    _startHideTimer();
+    setState(() {
+      _longPressActive = true;
+      _showSpeedPill = true;
+    });
+  }
+
+  void _onLongPressEnd(LongPressEndDetails details) {
+    widget.controller.setRate(_rateBeforeBoost);
+    _startHideTimer();
+    setState(() {
+      _longPressActive = false;
+      _showSpeedPill = false;
+    });
+  }
+
+  // ---------------------------------------------------------------------------
   // Brightness / Volume swipe gestures
   // ---------------------------------------------------------------------------
 
@@ -510,16 +690,23 @@ class _PlayerScreenState extends State<PlayerScreen> {
           onKeyEvent: _onKey,
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTapDown: (details) {
+            // The single-tap timer starts on tap UP (not down) so a long
+            // press never fires the pending tap: TapGestureRecognizer is
+            // rejected by the long-press recognizer before the pointer lifts.
+            onTapUp: (details) {
               _singleTapTimer?.cancel();
               _singleTapTimer = Timer(const Duration(milliseconds: 250), () {
+                if (_isSwiping || _longPressActive) return;
                 _onScreenTap();
               });
             },
+            onTapCancel: () => _singleTapTimer?.cancel(),
             onDoubleTapDown: (details) {
               _singleTapTimer?.cancel();
               _onDoubleTap(details);
             },
+            onLongPressStart: _onLongPressStart,
+            onLongPressEnd: _onLongPressEnd,
             onVerticalDragStart: _onVerticalDragStart,
             onVerticalDragUpdate: _onVerticalDragUpdate,
             onVerticalDragEnd: _onVerticalDragEnd,
@@ -527,10 +714,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
               fit: StackFit.expand,
               children: [
                 // -- Video surface -------------------------------------------
+                // The key includes subtitle state AND the zoom fit so the
+                // widget rebuilds whenever either changes. It stays fully
+                // mounted while Picture-in-Picture is active.
                 Center(
                   child: Video(
-                    key: ValueKey('$_subtitleOffset-$_subtitleOutline-$_subtitleFontSize-$_subtitleBgOpacity'),
+                    key: ValueKey(
+                      '$_subtitleOffset-$_subtitleOutline-$_subtitleFontSize-'
+                      '$_subtitleBgOpacity-$_videoFit',
+                    ),
                     controller: ctrl.videoController,
+                    fit: _videoFit,
                     controls: (state) => const SizedBox.shrink(),
                     subtitleViewConfiguration: _buildSubtitleConfig(),
                   ),
@@ -539,53 +733,60 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 // -- Loading spinner -----------------------------------------
                 _buildBufferingOverlay(ctrl),
 
-                // -- Brightness indicator (left side) ------------------------
-                Positioned(
-                  left: 40,
-                  top: 0,
-                  bottom: 0,
-                  child: Center(
-                    child: AdjustIndicator(
-                      icon: _brightness > 0.5
-                          ? Icons.brightness_high
-                          : _brightness > 0
-                              ? Icons.brightness_low
-                              : Icons.brightness_1,
-                      value: _brightness,
-                      visible: _showBrightnessIndicator,
+                // In PiP mode the system renders a minimal floating window —
+                // hide every overlay control (the video stays mounted).
+                if (!_isInPip) ...[
+                  // -- Brightness indicator (left side) ------------------------
+                  Positioned(
+                    left: 40,
+                    top: 0,
+                    bottom: 0,
+                    child: Center(
+                      child: AdjustIndicator(
+                        icon: _brightness > 0.5
+                            ? Icons.brightness_high
+                            : _brightness > 0
+                                ? Icons.brightness_low
+                                : Icons.brightness_1,
+                        value: _brightness,
+                        visible: _showBrightnessIndicator,
+                      ),
                     ),
                   ),
-                ),
 
-                // -- Volume indicator (right side) ---------------------------
-                Positioned(
-                  right: 40,
-                  top: 0,
-                  bottom: 0,
-                  child: Center(
-                    child: AdjustIndicator(
-                      icon: _volumeFraction > 0.5
-                          ? Icons.volume_up
-                          : _volumeFraction > 0
-                              ? Icons.volume_down
-                              : Icons.volume_off,
-                      value: _volumeFraction,
-                      visible: _showVolumeIndicator,
+                  // -- Volume indicator (right side) ---------------------------
+                  Positioned(
+                    right: 40,
+                    top: 0,
+                    bottom: 0,
+                    child: Center(
+                      child: AdjustIndicator(
+                        icon: _volumeFraction > 0.5
+                            ? Icons.volume_up
+                            : _volumeFraction > 0
+                                ? Icons.volume_down
+                                : Icons.volume_off,
+                        value: _volumeFraction,
+                        visible: _showVolumeIndicator,
+                      ),
                     ),
                   ),
-                ),
 
-                // -- Up Next overlay (series episodes) ------------------------
-                _buildUpNextOverlay(ctrl),
+                  // -- Up Next overlay (series episodes) ------------------------
+                  _buildUpNextOverlay(ctrl),
 
-                // -- Double-tap seek icons ------------------------------------
-                _buildSeekIconOverlay(),
+                  // -- Double-tap seek icons ------------------------------------
+                  _buildSeekIconOverlay(),
 
-                // -- Overlay controls ----------------------------------------
-                IgnorePointer(
-                  ignoring: !_controlsVisible,
-                  child: _buildControls(ctrl),
-                ),
+                  // -- Long-press 2x speed pill ---------------------------------
+                  _buildSpeedPillOverlay(),
+
+                  // -- Overlay controls ----------------------------------------
+                  IgnorePointer(
+                    ignoring: !_controlsVisible,
+                    child: _buildControls(ctrl),
+                  ),
+                ],
               ],
             ),
           ),
@@ -657,6 +858,48 @@ class _PlayerScreenState extends State<PlayerScreen> {
               ),
             );
           },
+        ),
+      ),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Long-press 2x speed pill
+  // ---------------------------------------------------------------------------
+
+  Widget _buildSpeedPillOverlay() {
+    return Positioned(
+      top: 24,
+      left: 0,
+      right: 0,
+      child: IgnorePointer(
+        child: Center(
+          child: AnimatedOpacity(
+            opacity: _showSpeedPill ? 1.0 : 0.0,
+            duration: const Duration(milliseconds: 150),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.black54,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '2×',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  SizedBox(width: 4),
+                  Icon(Icons.fast_forward, color: Colors.white, size: 18),
+                ],
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -787,6 +1030,22 @@ class _PlayerScreenState extends State<PlayerScreen> {
               contentType: widget.contentType,
             ),
           ),
+          // Screenshot button
+          IconButton(
+            icon: const Icon(Icons.photo_camera, color: AppColors.textPrimary),
+            tooltip: 'Screenshot',
+            onPressed: _takeScreenshot,
+          ),
+          // Picture-in-Picture button (hidden when unavailable)
+          if (_pipAvailable)
+            IconButton(
+              icon: const Icon(
+                Icons.picture_in_picture_alt,
+                color: AppColors.textPrimary,
+              ),
+              tooltip: 'Picture-in-Picture',
+              onPressed: _enterPip,
+            ),
           // Audio track button (only if multiple tracks)
           AnimatedBuilder(
             animation: ctrl,
@@ -837,13 +1096,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
               return const SizedBox.shrink();
             },
           ),
-          // Subtitle settings button
+          // Player settings button (tabbed sheet incl. subtitle settings)
           if (widget.contentId != null)
             IconButton(
               icon: const Icon(Icons.closed_caption,
                   color: AppColors.textPrimary),
-              tooltip: 'Subtitle settings',
-              onPressed: _showSubtitleSettings,
+              tooltip: 'Player settings',
+              onPressed: _showPlayerSettings,
             ),
           // Favorite button
           if (widget.contentId != null && widget.contentType != null)
@@ -906,6 +1165,48 @@ class _PlayerScreenState extends State<PlayerScreen> {
                   size: 36,
                 ),
               ),
+            ),
+
+            const SizedBox(height: 14),
+
+            // Quick-seek pills + playback speed chip
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                QuickSeekButton(
+                  label: '-30s',
+                  onPressed: () {
+                    ctrl.seekBy(const Duration(seconds: -30));
+                    _startHideTimer();
+                  },
+                ),
+                const SizedBox(width: 8),
+                QuickSeekButton(
+                  label: '-10s',
+                  onPressed: () {
+                    ctrl.seekBy(const Duration(seconds: -10));
+                    _startHideTimer();
+                  },
+                ),
+                const SizedBox(width: 8),
+                SpeedChip(rate: ctrl.rate, onTap: _showSpeedSelector),
+                const SizedBox(width: 8),
+                QuickSeekButton(
+                  label: '+10s',
+                  onPressed: () {
+                    ctrl.seekBy(const Duration(seconds: 10));
+                    _startHideTimer();
+                  },
+                ),
+                const SizedBox(width: 8),
+                QuickSeekButton(
+                  label: '+30s',
+                  onPressed: () {
+                    ctrl.seekBy(const Duration(seconds: 30));
+                    _startHideTimer();
+                  },
+                ),
+              ],
             ),
           ],
         );
@@ -1091,7 +1392,80 @@ class _PlayerScreenState extends State<PlayerScreen> {
     setState(() {});
   }
 
-  void _showSubtitleSettings() {
+  // ---------------------------------------------------------------------------
+  // Player settings — tabbed bottom sheet
+  // (Subtitles | Playback | Video | Audio | Advanced)
+  // ---------------------------------------------------------------------------
+
+  static const List<double> _speedPresets = [
+    0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 3.0, 4.0,
+  ];
+
+  String _formatRate(double rate) =>
+      rate % 1 == 0 ? rate.toStringAsFixed(1) : rate.toString();
+
+  String _formatDelay(double delay) {
+    if (delay == 0) return '0.0s';
+    return '${delay > 0 ? '+' : ''}${delay.toStringAsFixed(1)}s';
+  }
+
+  /// Opens the standalone playback speed selector (also used by the speed
+  /// chip in the bottom control bar).
+  Future<void> _showSpeedSelector() {
+    return showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.bgSurface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheetContext) {
+        return AnimatedBuilder(
+          animation: widget.controller,
+          builder: (context, _) {
+            final rate = widget.controller.rate;
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Playback Speed',
+                      style: TextStyle(
+                        color: AppColors.textPrimary,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    SettingsChipRow(
+                      children: [
+                        for (final speed in _speedPresets)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: SettingsChip(
+                              label: '${_formatRate(speed)}×',
+                              isSelected: (speed - rate).abs() < 0.001,
+                              onTap: () {
+                                widget.controller.setRate(speed);
+                                _startHideTimer();
+                              },
+                            ),
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showPlayerSettings() {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -1102,159 +1476,534 @@ class _PlayerScreenState extends State<PlayerScreen> {
       constraints: BoxConstraints(
         maxHeight: MediaQuery.of(context).size.height * 0.7,
       ),
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setModalState) {
-            return SingleChildScrollView(
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Drag handle
-                    Center(
-                      child: Container(
-                        width: 40,
-                        height: 4,
-                        margin: const EdgeInsets.only(bottom: 16),
-                        decoration: BoxDecoration(
-                          color: AppColors.textSecondary.withValues(alpha: 0.4),
-                          borderRadius: BorderRadius.circular(2),
-                        ),
+      builder: (sheetContext) {
+        return DefaultTabController(
+          length: 5,
+          child: StatefulBuilder(
+            builder: (context, setModalState) {
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Drag handle
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      margin: const EdgeInsets.only(top: 12, bottom: 8),
+                      decoration: BoxDecoration(
+                        color: AppColors.textSecondary.withValues(alpha: 0.4),
+                        borderRadius: BorderRadius.circular(2),
                       ),
                     ),
-                    const Text(
-                      'Subtitle Settings',
-                      style: TextStyle(
-                        color: AppColors.textPrimary,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    // Font size
-                    Text(
-                      'Font Size: ${_subtitleFontSize.round()}px',
-                      style: const TextStyle(
-                        color: AppColors.textSecondary,
-                        fontSize: 14,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
+                  ),
+                  const TabBar(
+                    isScrollable: true,
+                    tabAlignment: TabAlignment.start,
+                    labelColor: AppColors.accentPrimary,
+                    unselectedLabelColor: AppColors.textSecondary,
+                    indicatorColor: AppColors.accentPrimary,
+                    dividerColor: Colors.transparent,
+                    tabs: [
+                      Tab(text: 'Subtitles'),
+                      Tab(text: 'Playback'),
+                      Tab(text: 'Video'),
+                      Tab(text: 'Audio'),
+                      Tab(text: 'Advanced'),
+                    ],
+                  ),
+                  SizedBox(
+                    height: MediaQuery.of(context).size.height * 0.4,
+                    child: TabBarView(
                       children: [
-                        _fontSizeButton(14, setModalState),
-                        const SizedBox(width: 8),
-                        _fontSizeButton(18, setModalState),
-                        const SizedBox(width: 8),
-                        _fontSizeButton(24, setModalState),
-                        const SizedBox(width: 8),
-                        _fontSizeButton(32, setModalState),
+                        _subtitlesTab(setModalState),
+                        _playbackTab(setModalState),
+                        _videoTab(setModalState),
+                        _audioTab(setModalState),
+                        _advancedTab(sheetContext, setModalState),
                       ],
                     ),
-                    const SizedBox(height: 20),
-                    // Background opacity
-                    Text(
-                      'Background Opacity: ${(_subtitleBgOpacity * 100).round()}%',
-                      style: const TextStyle(
-                        color: AppColors.textSecondary,
-                        fontSize: 14,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    SliderTheme(
-                      data: SliderThemeData(
-                        activeTrackColor: AppColors.accentPrimary,
-                        inactiveTrackColor: AppColors.bgSurface,
-                        thumbColor: AppColors.accentPrimary,
-                        overlayColor: AppColors.accentPrimary.withValues(alpha: 0.2),
-                      ),
-                      child: Slider(
-                        value: _subtitleBgOpacity,
-                        min: 0.0,
-                        max: 1.0,
-                        divisions: 10,
-                        onChanged: (val) async {
-                          setModalState(() => _subtitleBgOpacity = val);
-                          setState(() => _subtitleBgOpacity = val);
-                          final prefs = await SharedPreferences.getInstance();
-                          await prefs.setDouble('subtitle_bg_opacity', val);
-                        },
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    // Subtitle vertical position
-                    const Text(
-                      'Vertical Position',
-                      style: TextStyle(
-                        color: AppColors.textSecondary,
-                        fontSize: 14,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        const Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-                        Expanded(
-                          child: SliderTheme(
-                            data: SliderThemeData(
-                              activeTrackColor: AppColors.accentPrimary,
-                              inactiveTrackColor: AppColors.bgSurface,
-                              thumbColor: AppColors.accentPrimary,
-                              overlayColor: AppColors.accentPrimary.withValues(alpha: 0.2),
-                            ),
-                            child: Slider(
-                              value: _subtitleOffset,
-                              min: -1.0,
-                              max: 1.0,
-                              divisions: 20,
-                              onChanged: (v) async {
-                                setModalState(() => _subtitleOffset = v);
-                                setState(() => _subtitleOffset = v);
-                                _applySubtitlePosition(v);
-                                final prefs = await SharedPreferences.getInstance();
-                                await prefs.setDouble('subtitle_offset', v);
-                              },
-                            ),
-                          ),
-                        ),
-                        const Icon(Icons.arrow_drop_up, color: AppColors.textSecondary),
-                      ],
-                    ),
-                    const SizedBox(height: 20),
-                    // Subtitle outline toggle
-                    SwitchListTile(
-                      title: const Text('Text Outline', style: TextStyle(color: AppColors.textPrimary)),
-                      subtitle: const Text('Black outline around subtitle text', style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
-                      value: _subtitleOutline,
-                      onChanged: (v) async {
-                        setModalState(() => _subtitleOutline = v);
-                        setState(() => _subtitleOutline = v);
-                        _applySubtitleStyle();
-                        final prefs = await SharedPreferences.getInstance();
-                        await prefs.setBool('subtitle_outline', v);
-                      },
-                      activeThumbColor: AppColors.accentPrimary,
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Styling will be applied when subtitle rendering is enabled.',
-                      style: TextStyle(
-                        color: AppColors.textSecondary,
-                        fontSize: 12,
-                        fontStyle: FontStyle.italic,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                  ],
-                ),
-              ),
-            );
-          },
+                  ),
+                ],
+              );
+            },
+          ),
         );
       },
+    );
+  }
+
+  Widget _settingsLabel(String text) => Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Text(
+          text,
+          style: const TextStyle(
+            color: AppColors.textSecondary,
+            fontSize: 14,
+          ),
+        ),
+      );
+
+  // -- Subtitles tab (existing controls, preserved) ---------------------------
+
+  Widget _subtitlesTab(StateSetter setModalState) {
+    return SingleChildScrollView(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Font size
+            Text(
+              'Font Size: ${_subtitleFontSize.round()}px',
+              style: const TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 14,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                _fontSizeButton(14, setModalState),
+                const SizedBox(width: 8),
+                _fontSizeButton(18, setModalState),
+                const SizedBox(width: 8),
+                _fontSizeButton(24, setModalState),
+                const SizedBox(width: 8),
+                _fontSizeButton(32, setModalState),
+              ],
+            ),
+            const SizedBox(height: 20),
+            // Background opacity
+            Text(
+              'Background Opacity: ${(_subtitleBgOpacity * 100).round()}%',
+              style: const TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 14,
+              ),
+            ),
+            const SizedBox(height: 8),
+            SliderTheme(
+              data: SliderThemeData(
+                activeTrackColor: AppColors.accentPrimary,
+                inactiveTrackColor: AppColors.bgSurface,
+                thumbColor: AppColors.accentPrimary,
+                overlayColor: AppColors.accentPrimary.withValues(alpha: 0.2),
+              ),
+              child: Slider(
+                value: _subtitleBgOpacity,
+                min: 0.0,
+                max: 1.0,
+                divisions: 10,
+                onChanged: (val) async {
+                  setModalState(() => _subtitleBgOpacity = val);
+                  setState(() => _subtitleBgOpacity = val);
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.setDouble('subtitle_bg_opacity', val);
+                },
+              ),
+            ),
+            const SizedBox(height: 20),
+            // Subtitle vertical position
+            const Text(
+              'Vertical Position',
+              style: TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 14,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                const Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
+                Expanded(
+                  child: SliderTheme(
+                    data: SliderThemeData(
+                      activeTrackColor: AppColors.accentPrimary,
+                      inactiveTrackColor: AppColors.bgSurface,
+                      thumbColor: AppColors.accentPrimary,
+                      overlayColor: AppColors.accentPrimary.withValues(alpha: 0.2),
+                    ),
+                    child: Slider(
+                      value: _subtitleOffset,
+                      min: -1.0,
+                      max: 1.0,
+                      divisions: 20,
+                      onChanged: (v) async {
+                        setModalState(() => _subtitleOffset = v);
+                        setState(() => _subtitleOffset = v);
+                        _applySubtitlePosition(v);
+                        final prefs = await SharedPreferences.getInstance();
+                        await prefs.setDouble('subtitle_offset', v);
+                      },
+                    ),
+                  ),
+                ),
+                const Icon(Icons.arrow_drop_up, color: AppColors.textSecondary),
+              ],
+            ),
+            const SizedBox(height: 20),
+            // Subtitle outline toggle
+            SwitchListTile(
+              title: const Text('Text Outline', style: TextStyle(color: AppColors.textPrimary)),
+              subtitle: const Text('Black outline around subtitle text', style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+              value: _subtitleOutline,
+              onChanged: (v) async {
+                setModalState(() => _subtitleOutline = v);
+                setState(() => _subtitleOutline = v);
+                _applySubtitleStyle();
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setBool('subtitle_outline', v);
+              },
+              activeThumbColor: AppColors.accentPrimary,
+              contentPadding: EdgeInsets.zero,
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Styling will be applied when subtitle rendering is enabled.',
+              style: TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 12,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // -- Playback tab ------------------------------------------------------------
+
+  Widget _playbackTab(StateSetter setModalState) {
+    final ctrl = widget.controller;
+    final remaining = _sleepRemainingText;
+    return SingleChildScrollView(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _settingsLabel('Speed'),
+            SettingsChipRow(
+              children: [
+                for (final speed in _speedPresets)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: SettingsChip(
+                      label: '${_formatRate(speed)}×',
+                      isSelected: (speed - ctrl.rate).abs() < 0.001,
+                      onTap: () {
+                        ctrl.setRate(speed);
+                        setModalState(() {});
+                      },
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            _delayControl(
+              label: 'Audio Delay',
+              value: ctrl.audioDelay,
+              onChanged: (v) => ctrl.setAudioDelay(v),
+              setModalState: setModalState,
+            ),
+            const SizedBox(height: 20),
+            _settingsLabel(
+              remaining == null ? 'Sleep Timer' : 'Sleep Timer — $remaining left',
+            ),
+            SettingsChipRow(
+              children: [
+                for (final minutes in const [0, 15, 30, 45, 60, 90])
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: SettingsChip(
+                      label: minutes == 0 ? 'Off' : '$minutes min',
+                      isSelected: _isSleepTimerSelected(minutes),
+                      onTap: () {
+                        _setSleepTimer(minutes);
+                        setModalState(() {});
+                      },
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  bool _isSleepTimerSelected(int minutes) {
+    final endsAt = _sleepEndsAt;
+    if (minutes == 0) return endsAt == null;
+    if (endsAt == null) return false;
+    final target = DateTime.now().add(Duration(minutes: minutes));
+    // "Selected" if the timer ends within ±30 s of this preset's window.
+    return endsAt.difference(target).abs() < const Duration(seconds: 30);
+  }
+
+  // -- Video tab ---------------------------------------------------------------
+
+  Widget _videoTab(StateSetter setModalState) {
+    final ctrl = widget.controller;
+    return SingleChildScrollView(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _settingsLabel('Aspect Ratio'),
+            SettingsChipRow(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: SettingsChip(
+                    label: 'Auto',
+                    isSelected: ctrl.aspectOverride == null,
+                    onTap: () {
+                      ctrl.setAspectRatio(null);
+                      setModalState(() {});
+                    },
+                  ),
+                ),
+                for (final preset in PlayerController.aspectPresets)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: SettingsChip(
+                      label: preset,
+                      isSelected: ctrl.aspectOverride == preset,
+                      onTap: () {
+                        ctrl.setAspectRatio(preset);
+                        setModalState(() {});
+                      },
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            _settingsLabel('Rotation'),
+            SettingsChipRow(
+              children: [
+                for (final degrees in const [0, 90, 180, 270])
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: SettingsChip(
+                      label: '$degrees°',
+                      isSelected: ctrl.rotation == degrees,
+                      onTap: () {
+                        ctrl.setRotation(degrees);
+                        setModalState(() {});
+                      },
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            _settingsLabel('Zoom Fit'),
+            SettingsChipRow(
+              children: [
+                for (final fit in const {
+                  'Contain': BoxFit.contain,
+                  'Cover': BoxFit.cover,
+                  'Fill': BoxFit.fill,
+                }.entries)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: SettingsChip(
+                      label: fit.key,
+                      isSelected: _videoFit == fit.value,
+                      onTap: () {
+                        setState(() => _videoFit = fit.value);
+                        setModalState(() {});
+                      },
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            SwitchListTile(
+              title: const Text('Deinterlace',
+                  style: TextStyle(color: AppColors.textPrimary)),
+              subtitle: const Text('Improves quality of interlaced sources',
+                  style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+              value: ctrl.deinterlace,
+              onChanged: (v) {
+                ctrl.setDeinterlace(v);
+                setModalState(() {});
+              },
+              activeThumbColor: AppColors.accentPrimary,
+              contentPadding: EdgeInsets.zero,
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // -- Audio tab ---------------------------------------------------------------
+
+  Widget _audioTab(StateSetter setModalState) {
+    final ctrl = widget.controller;
+    return SingleChildScrollView(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _settingsLabel('Volume Boost: ${ctrl.volume.round()}%'),
+            SliderTheme(
+              data: SliderThemeData(
+                activeTrackColor: AppColors.accentPrimary,
+                inactiveTrackColor: AppColors.bgSurface,
+                thumbColor: AppColors.accentPrimary,
+                overlayColor: AppColors.accentPrimary.withValues(alpha: 0.2),
+              ),
+              child: Slider(
+                value: ctrl.volume.clamp(0.0, PlayerController.maxVolumePercent),
+                min: 0.0,
+                max: PlayerController.maxVolumePercent,
+                divisions: 40,
+                onChanged: (v) {
+                  ctrl.setVolumeBoostPercent(v);
+                  setModalState(() {});
+                },
+              ),
+            ),
+            const Text(
+              '(>100% may distort)',
+              style: TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 12,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+            const SizedBox(height: 20),
+            _delayControl(
+              label: 'Subtitle Delay',
+              value: ctrl.subDelay,
+              onChanged: (v) => ctrl.setSubDelay(v),
+              setModalState: setModalState,
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // -- Advanced tab ------------------------------------------------------------
+
+  Widget _advancedTab(BuildContext sheetContext, StateSetter setModalState) {
+    final ctrl = widget.controller;
+    return SingleChildScrollView(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _settingsLabel('Buffer Size'),
+            SettingsChipRow(
+              children: [
+                for (final mb in const [16, 64, 150])
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: SettingsChip(
+                      label: '$mb MB',
+                      isSelected: ctrl.bufferMb == mb,
+                      onTap: () {
+                        ctrl.setBufferMegabytes(mb);
+                        setModalState(() {});
+                      },
+                    ),
+                  ),
+              ],
+            ),
+            const Text(
+              'Larger buffers smooth out unstable streams but increase '
+              'time to start / seek. Applies to the next stream opened.',
+              style: TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 12,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+            const SizedBox(height: 20),
+            _settingsLabel('Screenshot'),
+            ElevatedButton.icon(
+              onPressed: () {
+                Navigator.of(sheetContext).pop();
+                _takeScreenshot();
+              },
+              icon: const Icon(Icons.photo_camera),
+              label: const Text('Capture & Share'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.accentPrimary,
+                foregroundColor: AppColors.textPrimary,
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// -- Shared delay control (-0.5s / +0.5s / reset) ---------------------------
+
+  Widget _delayControl({
+    required String label,
+    required double value,
+    required ValueChanged<double> onChanged,
+    required StateSetter setModalState,
+  }) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _settingsLabel('$label: ${_formatDelay(value)}'),
+        SettingsChipRow(
+          children: [
+            SettingsChip(
+              label: '-0.5s',
+              isSelected: false,
+              onTap: () {
+                onChanged(
+                  double.parse((value - 0.5).toStringAsFixed(1)),
+                );
+                setModalState(() {});
+              },
+            ),
+            const SizedBox(width: 8),
+            SettingsChip(
+              label: '+0.5s',
+              isSelected: false,
+              onTap: () {
+                onChanged(
+                  double.parse((value + 0.5).toStringAsFixed(1)),
+                );
+                setModalState(() {});
+              },
+            ),
+            const SizedBox(width: 8),
+            SettingsChip(
+              label: 'Reset',
+              isSelected: false,
+              onTap: () {
+                onChanged(0.0);
+                setModalState(() {});
+              },
+            ),
+          ],
+        ),
+      ],
     );
   }
 

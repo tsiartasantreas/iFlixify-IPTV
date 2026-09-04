@@ -139,6 +139,43 @@ class PlayerController extends ChangeNotifier {
   late final StreamSubscription<double> _volumeSub;
   double _volume = 100.0;
 
+  /// True once `volume-max` has been raised to 200 via [setVolumeBoostPercent].
+  bool _volumeMaxRaised = false;
+
+  // -- VLC-grade playback state ---------------------------------------------
+
+  /// Playback rate (persistent across [open] calls on purpose).
+  double _rate = 1.0;
+
+  /// Audio delay in seconds (negative = earlier). Reset on every [open].
+  double _audioDelay = 0.0;
+
+  /// Subtitle delay in seconds (negative = earlier). Reset on every [open].
+  double _subDelay = 0.0;
+
+  /// Aspect-ratio override preset, or null when off. Reset on every [open].
+  String? _aspectOverride;
+
+  /// Video rotation in degrees (0/90/180/270). Reset on every [open].
+  int _rotation = 0;
+
+  /// Whether deinterlacing is enabled. Reset on every [open].
+  bool _deinterlace = false;
+
+  /// Demuxer buffer size in megabytes. Persisted across [open] calls.
+  int _bufferMb = 64;
+
+  /// Whether the audio equalizer feature is usable on this platform/engine.
+  ///
+  /// The installed media_kit (1.2.6) does not ship an `Equalizer` API, so this
+  /// is `false` and [setEqualizerPreset] is a no-op. Kept non-final so a
+  /// future engine upgrade can flip it at runtime.
+  // ignore: prefer_final_fields
+  bool _equalizerAvailable = false;
+
+  /// Currently selected equalizer preset name, or null (Flat / disabled).
+  String? _equalizerPreset;
+
   // ---------------------------------------------------------------------------
   // Public API — read-only properties
   // ---------------------------------------------------------------------------
@@ -223,20 +260,46 @@ class PlayerController extends ChangeNotifier {
 
   // -- Volume getter/setter --------------------------------------------------
 
-  /// Current volume in the range [0, 100].
+  /// Maximum volume in percent. Stays 100 until [setVolumeBoostPercent]
+  /// raises the underlying mpv `volume-max` property to 200.
+  static const double maxVolumePercent = 200.0;
+
+  /// Current volume in the range [0, 100] normally, or [0, 200] once the
+  /// volume boost has been enabled.
   double get volume => _volume;
 
-  /// Set volume. [value] is clamped to [0, 100].
+  /// Set volume. [value] is clamped to [0, 100], or [0, 200] after
+  /// [setVolumeBoostPercent] has raised `volume-max`.
   Future<void> setVolume(double value) async {
-    await _player.setVolume(value.clamp(0, 100));
+    final max = _volumeMaxRaised ? maxVolumePercent : 100.0;
+    await _player.setVolume(value.clamp(0, max));
   }
 
-  /// Volume as a fraction [0, 1] (convenient for slider widgets).
+  /// Volume as a fraction [0, 1] (convenient for slider widgets). Values
+  /// above 100 clamp to 1.0 so existing UI sliders keep working unchanged.
   double get volumeFraction => (_volume / 100).clamp(0.0, 1.0);
 
   /// Set volume from a fraction [0, 1].
   Future<void> setVolumeFraction(double fraction) =>
       setVolume(fraction * 100);
+
+  /// Enable soft volume boost and set the volume to [p] percent
+  /// (clamped to [0, 200]). Raises the mpv `volume-max` property to 200
+  /// exactly once, lazily, on first use.
+  Future<void> setVolumeBoostPercent(double p) async {
+    if (!_volumeMaxRaised) {
+      _setProperty('volume-max', maxVolumePercent.toStringAsFixed(0));
+      _volumeMaxRaised = true;
+    }
+    final clamped = p.clamp(0.0, maxVolumePercent).toDouble();
+    try {
+      await _player.setVolume(clamped);
+    } catch (e) {
+      debugPrint('[PlayerEngine] setVolumeBoostPercent($clamped) failed: $e');
+    }
+    _volume = clamped;
+    notifyListeners();
+  }
 
   // ---------------------------------------------------------------------------
   // Public API — playback controls
@@ -256,6 +319,19 @@ class PlayerController extends ChangeNotifier {
     _lastUrl = url;
     _lastConfig = config ?? PlayerConfig.defaultConfig;
     _currentConfig = _lastConfig!;
+
+    // -- Reset per-stream VLC-grade state (BEFORE _player.open) --------------
+    // NOTE: _rate is intentionally NOT reset — it persists across opens.
+    _audioDelay = 0.0;
+    _subDelay = 0.0;
+    _aspectOverride = null;
+    _setProperty('video-aspect-override', 'no');
+    _rotation = 0;
+    _setProperty('video-rotate', '0');
+    _deinterlace = false;
+    _setProperty('deinterlace', 'no');
+    // _bufferMb intentionally persists across opens.
+    notifyListeners();
 
     // ignore: avoid_print
     print('[PlayerController] open() url=$url');
@@ -322,6 +398,13 @@ class PlayerController extends ChangeNotifier {
       }
     }
 
+    // Re-apply audio/subtitle delay properties after the new playback chain
+    // is up, because mpv resets them when the media changes. Both are zero
+    // here (state is reset at the top of open()), but applying them explicitly
+    // guarantees the new stream starts with a clean delay state.
+    _applyAudioDelayProperty();
+    _applySubDelayProperty();
+
     // Start a timeout -- if playback never begins, surface an error.
     _timeoutTimer?.cancel();
     _timeoutTimer = Timer(const Duration(seconds: 15), () {
@@ -380,6 +463,148 @@ class PlayerController extends ChangeNotifier {
       _player.setSubtitleTrack(track);
 
   // ---------------------------------------------------------------------------
+  // Public API — VLC-grade playback controls
+  // ---------------------------------------------------------------------------
+
+  // -- Playback rate ---------------------------------------------------------
+
+  /// Current playback rate. Persists across [open] calls.
+  double get rate => _rate;
+
+  /// Set playback rate, clamped to [0.25, 4.0].
+  Future<void> setRate(double r) async {
+    final clamped = r.clamp(0.25, 4.0);
+    try {
+      await _player.setRate(clamped);
+    } catch (e) {
+      debugPrint('[PlayerEngine] setRate($clamped) failed: $e');
+    }
+    _rate = clamped;
+    notifyListeners();
+  }
+
+  // -- Audio / subtitle delay (seconds; negative = earlier) ------------------
+
+  /// Audio delay in seconds (negative = audio plays earlier). Reset on open.
+  double get audioDelay => _audioDelay;
+
+  /// Set the audio delay in seconds. Negative values make audio earlier.
+  Future<void> setAudioDelay(double s) async {
+    _audioDelay = s;
+    _applyAudioDelayProperty();
+    notifyListeners();
+  }
+
+  /// Subtitle delay in seconds (negative = subs play earlier). Reset on open.
+  double get subDelay => _subDelay;
+
+  /// Set the subtitle delay in seconds. Negative values make subs earlier.
+  Future<void> setSubDelay(double s) async {
+    _subDelay = s;
+    _applySubDelayProperty();
+    notifyListeners();
+  }
+
+  // -- Aspect ratio override -------------------------------------------------
+
+  /// Supported aspect-ratio override presets.
+  static const List<String> aspectPresets = ['16:9', '4:3', '1:1', '21:9', '2.35:1'];
+
+  /// Current aspect-ratio override preset, or null when off. Reset on open.
+  String? get aspectOverride => _aspectOverride;
+
+  /// Override the display aspect ratio. Pass null to disable the override.
+  Future<void> setAspectRatio(String? aspect) async {
+    _setProperty('video-aspect-override', aspect ?? 'no');
+    _aspectOverride = aspect;
+    notifyListeners();
+  }
+
+  // -- Rotation ---------------------------------------------------------------
+
+  /// Current video rotation in degrees (0/90/180/270). Reset on open.
+  int get rotation => _rotation;
+
+  /// Rotate the video by [degrees] (normalized to 0/90/180/270).
+  Future<void> setRotation(int degrees) async {
+    final normalized = ((degrees % 360) + 360) % 360;
+    _setProperty('video-rotate', '$normalized');
+    _rotation = normalized;
+    notifyListeners();
+  }
+
+  // -- Deinterlace -------------------------------------------------------------
+
+  /// Whether deinterlacing is enabled. Reset on open.
+  bool get deinterlace => _deinterlace;
+
+  /// Enable or disable deinterlacing.
+  Future<void> setDeinterlace(bool on) async {
+    _setProperty('deinterlace', on ? 'yes' : 'no');
+    _deinterlace = on;
+    notifyListeners();
+  }
+
+  // -- Network buffer ----------------------------------------------------------
+
+  /// Current demuxer buffer size in megabytes. Persists across [open] calls.
+  int get bufferMb => _bufferMb;
+
+  /// Set the demuxer maximum buffer size in megabytes.
+  Future<void> setBufferMegabytes(int mb) async {
+    _setProperty('demuxer-max-bytes', '${mb * 1024 * 1024}');
+    _bufferMb = mb;
+    notifyListeners();
+  }
+
+  // -- Screenshot --------------------------------------------------------------
+
+  /// Capture the current video frame as a PNG, or null on failure.
+  Future<Uint8List?> takeScreenshot() async {
+    try {
+      return await _player.screenshot(format: 'image/png');
+    } catch (e) {
+      debugPrint('[PlayerEngine] takeScreenshot() failed: $e');
+      return null;
+    }
+  }
+
+  // -- Equalizer ---------------------------------------------------------------
+
+  /// Whether the audio equalizer is available on this engine.
+  ///
+  /// The installed media_kit (1.2.6) does not ship an `Equalizer` API, so
+  /// this is `false` and [setEqualizerPreset] is a safe no-op. UI layers
+  /// should hide equalizer controls when this is false.
+  bool get equalizerAvailable => _equalizerAvailable;
+
+  /// Currently selected equalizer preset name, or null (Flat / disabled).
+  String? get equalizerPreset => _equalizerPreset;
+
+  /// Supported equalizer preset names.
+  static const List<String> equalizerPresets = [
+    'Flat',
+    'Bass Boost',
+    'Rock',
+    'Pop',
+    'Vocal Boost',
+    'Treble Boost',
+  ];
+
+  /// Apply a named equalizer preset, or null to reset to Flat.
+  ///
+  /// No-op while [equalizerAvailable] is false.
+  Future<void> setEqualizerPreset(String? name) async {
+    if (!_equalizerAvailable) {
+      debugPrint('[PlayerEngine] setEqualizerPreset("$name") ignored: '
+          'equalizer unavailable');
+      return;
+    }
+    _equalizerPreset = name;
+    notifyListeners();
+  }
+
+  // ---------------------------------------------------------------------------
   // Lifecycle
   // ---------------------------------------------------------------------------
 
@@ -401,6 +626,31 @@ class PlayerController extends ChangeNotifier {
   // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------
+
+  /// Set a native mpv property, swallowing all failures so a rejected
+  /// property can never break playback.
+  void _setProperty(String key, String value) {
+    try {
+      final native = _player.platform;
+      if (native is NativePlayer) {
+        native.setProperty(key, value).catchError((Object e) {
+          debugPrint('[PlayerEngine] setProperty($key, $value) failed: $e');
+        });
+      }
+    } catch (e) {
+      debugPrint('[PlayerEngine] setProperty($key, $value) failed: $e');
+    }
+  }
+
+  /// Push [_audioDelay] to the mpv `audio-delay` property (fire-and-forget).
+  void _applyAudioDelayProperty() {
+    _setProperty('audio-delay', _audioDelay.toStringAsFixed(2));
+  }
+
+  /// Push [_subDelay] to the mpv `sub-delay` property (fire-and-forget).
+  void _applySubDelayProperty() {
+    _setProperty('sub-delay', _subDelay.toStringAsFixed(2));
+  }
 
   static String _formatDuration(Duration d) {
     final h = d.inHours;
