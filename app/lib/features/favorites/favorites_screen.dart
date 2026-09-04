@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:drift/drift.dart' as drift;
 import 'package:flutter/material.dart';
 
+import '../../core/auth/profile_manager.dart';
 import '../../core/data/database.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_theme.dart';
@@ -116,11 +117,32 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
     }
   }
 
+  /// Strips the profile-scoping prefix (`"<profileId>:"`) from a stored
+  /// favorite [contentId] so 3-part ids like `"17:vod:42"` resolve the same
+  /// as the raw `"vod:42"`. Legacy 2-part ids are returned unchanged.
+  String _stripProfilePrefix(String contentId) {
+    final parts = contentId.split(':');
+    if (parts.length == 3 &&
+        (parts[0] == 'default' || int.tryParse(parts[0]) != null)) {
+      return '${parts[1]}:${parts[2]}';
+    }
+    final profileId = ProfileManager.instance.activeProfileId ?? 'default';
+    final prefix = '$profileId:';
+    if (contentId.startsWith(prefix)) {
+      return contentId.substring(prefix.length);
+    }
+    return contentId;
+  }
+
   /// Resolves a [Favorite] record to a displayable [_FavoriteItem] by
   /// looking up the actual content in the relevant table.
   Future<_FavoriteItem?> _resolveFavorite(Favorite fav) async {
+    // Favorites are stored with a profile-scoping prefix
+    // ("<profileId>:type:id"); strip it so 3-part ids resolve.
+    final contentId = _stripProfilePrefix(fav.contentId);
+
     // Parse polymorphic ID: "channel:42", "vod:7", "series:19".
-    final parts = fav.contentId.split(':');
+    final parts = contentId.split(':');
     if (parts.length != 2) return null;
 
     final type = parts[0];

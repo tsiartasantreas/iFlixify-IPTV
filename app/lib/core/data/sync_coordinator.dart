@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import '../auth/profile_manager.dart';
 import '../entitlement/entitlement_service.dart';
 import 'favorites_service.dart';
 import 'playlist_sync_service.dart';
@@ -7,7 +8,7 @@ import 'supabase_client.dart';
 import 'watch_progress_service.dart';
 
 /// Coordinates two-way cloud sync across local persistence services
-/// (favourites, watch progress, playlists).
+/// (profiles, favourites, watch progress, playlists).
 ///
 /// Use [maybeFullSync] after sign-in and on app open for returning users; it
 /// is a safe no-op when Supabase is unavailable or nobody is signed in.
@@ -42,30 +43,47 @@ class SyncCoordinator {
     await instance.fullSync();
   }
 
-  /// Pushes local favourites, watch progress, and playlists to the cloud,
-  /// then merges cloud rows back into the local database.
+  /// Syncs everything to and from the cloud, in this order:
   ///
-  /// Favourites sync for any signed-in user; watch-progress and playlist
-  /// sync are Pro-only and gated internally by [WatchProgressService] and
-  /// [PlaylistSyncService] respectively. All errors are logged
-  /// and swallowed — sync must never disrupt the UI flow that triggered it.
+  /// 1. **Profiles** first, so the cloud profile identities exist locally
+  ///    before any profile-scoped data is pulled (cloud
+  ///    `user_profiles.profile_id` equals the local profile id — see
+  ///    [ProfileManager.localToCloudIdMap]). Pull before push so the
+  ///    single-active-profile enforcement is driven by the CLOUD-flagged
+  ///    active row, then push local edits.
+  /// 2. **Playlists** — Pro-gated internally by [PlaylistSyncService].
+  /// 3. **Favourites** — any signed-in user.
+  /// 4. **Watch progress** — Pro-gated internally by
+  ///    [WatchProgressService].
+  ///
+  /// Within each data service the pull runs before the push: pull merges
+  /// cloud rows into local (newer-wins / restore), then push uploads the
+  /// merged state and reconciles deletions — pushing first would make the
+  /// deletion reconciliation consider not-yet-pulled cloud rows stale.
+  /// All errors are logged and swallowed — sync must never disrupt the UI
+  /// flow that triggered it.
   Future<void> fullSync() async {
     if (_syncing) return; // A sync is already in flight.
     _syncing = true;
     try {
-      // Refresh the tier cache so the Pro-gated watch-progress sync can run.
+      // Refresh the tier cache so the Pro-gated syncs can run.
       await _entitlementService.refreshTier();
 
-      // Push local state first so newly-added items exist in the cloud,
-      // then pull remote changes (merge-only; nothing local is deleted).
-      await _favoritesService.syncToCloud();
-      await _favoritesService.syncFromCloud();
+      // 1. Profiles (not tier-gated).
+      await ProfileManager.instance.syncFromCloud();
+      await ProfileManager.instance.syncToCloud();
 
-      await _watchProgressService.syncToCloud();
-      await _watchProgressService.syncFromCloud();
-
-      await PlaylistSyncService.instance.syncToCloud();
+      // 2. Playlists (Pro).
       await PlaylistSyncService.instance.syncFromCloud();
+      await PlaylistSyncService.instance.syncToCloud();
+
+      // 3. Favourites (Free + Pro).
+      await _favoritesService.syncFromCloud();
+      await _favoritesService.syncToCloud();
+
+      // 4. Watch progress (Pro).
+      await _watchProgressService.syncFromCloud();
+      await _watchProgressService.syncToCloud();
     } catch (e) {
       // ignore: avoid_print
       print('[SyncCoordinator] fullSync failed: $e');

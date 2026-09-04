@@ -41,7 +41,20 @@ part 'database.g.dart';
   ],
 )
 class AppDatabase extends _$AppDatabase {
-  AppDatabase() : super(_openConnection());
+  AppDatabase._internal() : super(_openConnection());
+
+  /// Shared singleton instance.
+  ///
+  /// Every default `AppDatabase()` call site (screens, services, importers)
+  /// shares ONE underlying connection so concurrent access -- e.g. a long
+  /// background import transaction while the UI queries playlists -- can
+  /// never hit SQLite's "database is locked" (SQLITE_BUSY, error code 5).
+  /// Previously each `AppDatabase()` opened its own connection, which made
+  /// playlist loading fail while an import was running.
+  static final AppDatabase _shared = AppDatabase._internal();
+
+  /// Returns the shared [AppDatabase] instance.
+  factory AppDatabase() => _shared;
 
   /// Named constructor for tests -- lets callers supply a custom executor.
   // ignore: avoid_unused_constructor_parameters
@@ -55,6 +68,14 @@ class AppDatabase extends _$AppDatabase {
   MigrationStrategy get migration => MigrationStrategy(
         onCreate: (m) => m.createAll(),
         onUpgrade: (m, from, to) async {
+          // Catch-up: ensure every table of the CURRENT schema exists.
+          // Upgrades from old versions predate some tables (they were only
+          // ever created by onCreate, never re-created in onUpgrade), so an
+          // upgraded install could be missing e.g. watch_progress_entry and
+          // every Continue Watching save would silently fail with
+          // "no such table". createAll emits CREATE TABLE IF NOT EXISTS, so
+          // this is idempotent and cheap.
+          await m.createAll();
           if (from < 2) {
             await m.createTable(userProfiles);
           }

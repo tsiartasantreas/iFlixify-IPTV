@@ -196,83 +196,88 @@ class BrowseScreenState extends State<BrowseScreen> with RouteAware {
     final parentalLocked =
         await ParentalControlService.instance.isAdultContentLocked();
 
-    switch (widget.contentType) {
-      case 'live':
-        final query = _db.select(_db.channels)
-          ..where((t) => t.playlistId.isIn(playlistIds));
-        final channels = await query.get();
-        // ignore: avoid_print
-        print('[BrowseScreen] Loaded ${channels.length} live channels');
-        for (final ch in channels) {
-          items.add(_BrowseItem(
-            id: ch.id,
-            title: ch.name,
-            imageUrl: ch.logo,
-            url: ch.url,
-            groupTitle: ch.groupTitle,
-            contentType: 'live',
-            tvgName: ch.tvgName,
-          ));
-        }
-        break;
-      case 'vod':
-        final query = _db.select(_db.vodItems)
-          ..where((t) => t.playlistId.isIn(playlistIds));
-        final vodItems = await query.get();
-        // ignore: avoid_print
-        print('[BrowseScreen] Loaded ${vodItems.length} VOD items');
-        for (final vod in vodItems) {
-          items.add(_BrowseItem(
-            id: vod.id,
-            title: vod.title,
-            imageUrl: vod.poster,
-            url: vod.url,
-            groupTitle: vod.groupTitle,
-            contentType: 'vod',
-            rating: vod.rating,
-          ));
-        }
-        break;
-      case 'series':
-        final query = _db.select(_db.tvSeries)
-          ..where((t) => t.playlistId.isIn(playlistIds));
-        final series = await query.get();
-        // ignore: avoid_print
-        print('[BrowseScreen] Loaded ${series.length} series');
-        for (final s in series) {
-          items.add(_BrowseItem(
-            id: s.id,
-            title: s.title,
-            imageUrl: s.poster,
-            url: '',
-            groupTitle: null,
-            contentType: 'series',
-          ));
-        }
-        break;
-      case 'radio':
-        final query = _db.select(_db.radioStations)
-          ..where((t) => t.playlistId.isIn(playlistIds));
-        final stations = await query.get();
-        // ignore: avoid_print
-        print('[BrowseScreen] Loaded ${stations.length} radio stations');
-        for (final radio in stations) {
-          items.add(_BrowseItem(
-            id: radio.id,
-            title: radio.name,
-            imageUrl: radio.logo,
-            url: radio.url,
-            groupTitle: null,
-            contentType: 'radio',
-          ));
-        }
-        break;
+    // Fail-soft: a transient DB error (e.g. SQLITE_BUSY during a background
+    // import) must never abort the whole load.
+    try {
+      switch (widget.contentType) {
+        case 'live':
+          final query = _db.select(_db.channels)
+            ..where((t) => t.playlistId.isIn(playlistIds));
+          final channels = await query.get();
+          // ignore: avoid_print
+          print('[BrowseScreen] Loaded ${channels.length} live channels');
+          for (final ch in channels) {
+            items.add(_BrowseItem(
+              id: ch.id,
+              title: ch.name,
+              imageUrl: ch.logo,
+              url: ch.url,
+              groupTitle: ch.groupTitle,
+              contentType: 'live',
+              tvgName: ch.tvgName,
+            ));
+          }
+          break;
+        case 'vod':
+          final query = _db.select(_db.vodItems)
+            ..where((t) => t.playlistId.isIn(playlistIds));
+          final vodItems = await query.get();
+          // ignore: avoid_print
+          print('[BrowseScreen] Loaded ${vodItems.length} VOD items');
+          for (final vod in vodItems) {
+            items.add(_BrowseItem(
+              id: vod.id,
+              title: vod.title,
+              imageUrl: vod.poster,
+              url: vod.url,
+              groupTitle: vod.groupTitle,
+              contentType: 'vod',
+              rating: vod.rating,
+            ));
+          }
+          break;
+        case 'series':
+          final query = _db.select(_db.tvSeries)
+            ..where((t) => t.playlistId.isIn(playlistIds));
+          final series = await query.get();
+          // ignore: avoid_print
+          print('[BrowseScreen] Loaded ${series.length} series');
+          for (final s in series) {
+            items.add(_BrowseItem(
+              id: s.id,
+              title: s.title,
+              imageUrl: s.poster,
+              url: '',
+              groupTitle: null,
+              contentType: 'series',
+            ));
+          }
+          break;
+        case 'radio':
+          final query = _db.select(_db.radioStations)
+            ..where((t) => t.playlistId.isIn(playlistIds));
+          final stations = await query.get();
+          // ignore: avoid_print
+          print('[BrowseScreen] Loaded ${stations.length} radio stations');
+          for (final radio in stations) {
+            items.add(_BrowseItem(
+              id: radio.id,
+              title: radio.name,
+              imageUrl: radio.logo,
+              url: radio.url,
+              groupTitle: null,
+              contentType: 'radio',
+            ));
+          }
+          break;
+      }
+    } catch (e) {
+      debugPrint('[PlaylistLoad] browse content query failed: $e');
     }
 
-    // ignore: avoid_print
-    print('[BrowseScreen] Total items loaded for '
-        '${widget.contentType}: ${items.length} '
-        '(playlists: $playlistIds)');
+    debugPrint('[PlaylistLoad] BrowseScreen._loadItems done: '
+        'contentType=${widget.contentType}, items=${items.length}, '
+        'playlists=$playlistIds');
 
     // Filter out adult content when parental controls are active.
     if (parentalLocked) {
@@ -350,35 +355,37 @@ class BrowseScreenState extends State<BrowseScreen> with RouteAware {
     if (SupabaseService.isInitialized) {
       userId = SupabaseService.client.auth.currentUser?.id;
     }
-    // ignore: avoid_print
-    print('[BrowseScreen._getUserPlaylistIds] userId=$userId, '
+    debugPrint('[PlaylistLoad] BrowseScreen._loadItems: userId=$userId, '
         'supabaseInitialized=${SupabaseService.isInitialized}');
 
     List<Playlist> playlists;
-    if (userId != null) {
-      playlists = await (_db.select(_db.playlists)
-            ..where((t) => t.userId.equals(userId!)))
-          .get();
-    } else {
-      playlists = await (_db.select(_db.playlists)
-            ..where((t) => t.userId.isNull()))
-          .get();
-    }
+    try {
+      if (userId != null) {
+        playlists = await (_db.select(_db.playlists)
+              ..where((t) => t.userId.equals(userId!)))
+            .get();
+      } else {
+        playlists = await (_db.select(_db.playlists)
+              ..where((t) => t.userId.isNull()))
+            .get();
+      }
 
-    // Fallback: if no playlists matched the user filter, try without any
-    // filter. This covers cases where the auth state at query time differs
-    // from the auth state at import time.
-    if (playlists.isEmpty) {
-      // ignore: avoid_print
-      print('[BrowseScreen._getUserPlaylistIds] No playlists matched '
-          'userId filter — falling back to ALL playlists');
-      playlists = await (_db.select(_db.playlists)).get();
+      // Fallback: if no playlists matched the user filter, try without any
+      // filter. This covers cases where the auth state at query time differs
+      // from the auth state at import time.
+      if (playlists.isEmpty) {
+        debugPrint('[PlaylistLoad] no playlists matched userId filter — '
+            'falling back to ALL playlists');
+        playlists = await (_db.select(_db.playlists)).get();
+      }
+    } catch (e) {
+      // Fail-soft: a transient DB error must never abort content loading.
+      debugPrint('[PlaylistLoad] playlist query failed: $e');
+      playlists = [];
     }
 
     final ids = playlists.map((p) => p.id).toList();
-    // ignore: avoid_print
-    print('[BrowseScreen._getUserPlaylistIds] Returning ${ids.length} '
-        'playlist IDs: $ids');
+    debugPrint('[PlaylistLoad] returning ${ids.length} playlist IDs: $ids');
     return ids;
   }
 

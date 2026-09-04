@@ -1,6 +1,7 @@
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:iflixify/core/auth/profile_manager.dart';
 import 'package:iflixify/core/data/database.dart';
 import 'package:iflixify/core/data/watch_progress_service.dart';
 import 'package:iflixify/core/entitlement/entitlement_service.dart';
@@ -159,6 +160,46 @@ void main() {
     test('returns empty list when no progress exists', () async {
       final items = await service.getContinueWatching();
       expect(items, isEmpty);
+    });
+
+    test('includes default-scoped rows when an active profile is set',
+        () async {
+      // Rows written while no active profile was known carry the literal
+      // 'default:' prefix (written by _scopedId with a null cache). They must
+      // stay visible once a profile becomes active — regression test: they
+      // used to be silently dropped by the reader filter.
+      await db.into(db.watchProgressEntry).insert(
+            WatchProgressEntryCompanion(
+              contentId: const Value('default:vod:9'),
+              positionMs: const Value(5000),
+              durationMs: const Value(60000),
+              updatedAt: Value(DateTime.now()),
+            ),
+          );
+
+      // Activate a real profile (id 1) so the reader's current-profile prefix
+      // no longer matches the stored 'default:' prefix.
+      final profileDb = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(profileDb.close);
+      final manager = ProfileManager.forTesting(profileDb);
+      final previous = ProfileManager.instance;
+      ProfileManager.setInstance(manager);
+      addTearDown(() => ProfileManager.setInstance(previous));
+
+      await profileDb.into(profileDb.userProfiles).insert(
+            UserProfilesCompanion.insert(
+              displayName: 'P',
+              avatarColor: 0xFFE50914,
+              createdAt: DateTime.now(),
+              isActive: const Value(true),
+            ),
+          );
+      await manager.getActiveProfile(); // populates the id cache ('1')
+
+      // A fresh service picks up the newly set profile manager.
+      final scopedService = WatchProgressService(database: db);
+      final items = await scopedService.getContinueWatching();
+      expect(items.map((i) => i.contentId), contains('default:vod:9'));
     });
 
     test('returns items sorted by most recently updated', () async {

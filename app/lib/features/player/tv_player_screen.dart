@@ -200,7 +200,7 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
   // ---------------------------------------------------------------------------
 
   /// Persists the current playback position for Continue Watching.
-  void _saveWatchProgress() {
+  Future<void> _saveWatchProgress() async {
     // Never persist while the resume seek is still pending — the position
     // is still ~0 and saving would destroy the saved progress we are
     // trying to resume from (making the next launch restart from the
@@ -211,11 +211,34 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
     final ctrl = widget.controller;
     final durationMs = ctrl.duration.inMilliseconds;
     if (durationMs <= 0) return;
-    _watchService.saveProgress(
+    await _watchService.saveProgress(
       id,
       ctrl.position.inMilliseconds,
       durationMs,
     );
+  }
+
+  /// Cancels the periodic timer and persists the final playback position,
+  /// awaiting completion. Pop handlers call this BEFORE removing the route so
+  /// the Continue Watching row is guaranteed to be committed before any
+  /// parent screen reloads its data (the old fire-and-forget dispose save
+  /// raced the parent's reload and the row could appear only on the next
+  /// reload).
+  Future<void> _flushFinalProgress() async {
+    if (!_recordsProgress) return;
+    _progressTimer?.cancel();
+    _progressTimer = null;
+    try {
+      await _saveWatchProgress();
+    } catch (_) {
+      // A failed save must never block navigation.
+    }
+  }
+
+  /// Exits the player: flushes the final watch-progress save first, then pops.
+  Future<void> _exitPlayer() async {
+    await _flushFinalProgress();
+    if (mounted) Navigator.of(context).pop();
   }
 
   /// Attempts to seek to [TvPlayerScreen.startPosition] once the media
@@ -363,7 +386,7 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
       // Back / Escape => exit player
       case LogicalKeyboardKey.goBack:
       case LogicalKeyboardKey.escape:
-        if (mounted) Navigator.of(context).pop();
+        _exitPlayer();
         return KeyEventResult.handled;
 
       default:
@@ -380,7 +403,14 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
     final ctrl = widget.controller;
 
     return PopScope(
-      canPop: true,
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        // Persist the final position BEFORE the route pops so parent
+        // screens reload with the save already committed.
+        await _flushFinalProgress();
+        if (context.mounted) Navigator.of(context).pop();
+      },
       child: Scaffold(
         backgroundColor: Colors.black,
         body: Focus(

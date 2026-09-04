@@ -8,6 +8,7 @@ import '../../core/data/favorites_service.dart';
 import '../../core/data/import_progress_service.dart';
 import '../../core/data/parental_control_service.dart';
 import '../../core/data/supabase_client.dart';
+import '../../core/data/sync_coordinator.dart';
 import '../../core/data/watch_progress_service.dart';
 import '../../core/entitlement/entitlement_service.dart';
 import '../../core/theme/app_colors.dart';
@@ -183,7 +184,9 @@ class HomeScreenState extends State<HomeScreen> {
         await ParentalControlService.instance.isAdultContentLocked();
 
     // Get playlist IDs belonging to the current user.
+    debugPrint('[PlaylistLoad] HomeScreen._loadContent start');
     final playlistIds = await _getUserPlaylistIds();
+    debugPrint('[PlaylistLoad] playlists found: ${playlistIds.length}');
     if (playlistIds.isEmpty) {
       if (mounted) {
         setState(() {
@@ -196,25 +199,38 @@ class HomeScreenState extends State<HomeScreen> {
 
     // Query content tables filtered by user's playlists, ordering by id
     // descending so the latest items appear first in each row.
-    final channelsQuery = _db.select(_db.channels)
-      ..where((t) => t.playlistId.isIn(playlistIds))
-      ..orderBy([(c) => OrderingTerm.desc(c.id)]);
-    final channels = await channelsQuery.get();
+    // Fail-soft: a transient DB error (e.g. SQLITE_BUSY during a background
+    // import) must never abort the whole load -- fall back to empty lists.
+    var channels = <Channel>[];
+    var vodItems = <VodItem>[];
+    var series = <TvSery>[];
+    var radioStations = <RadioStation>[];
+    try {
+      final channelsQuery = _db.select(_db.channels)
+        ..where((t) => t.playlistId.isIn(playlistIds))
+        ..orderBy([(c) => OrderingTerm.desc(c.id)]);
+      channels = await channelsQuery.get();
 
-    final vodQuery = _db.select(_db.vodItems)
-      ..where((t) => t.playlistId.isIn(playlistIds))
-      ..orderBy([(v) => OrderingTerm.desc(v.id)]);
-    final vodItems = await vodQuery.get();
+      final vodQuery = _db.select(_db.vodItems)
+        ..where((t) => t.playlistId.isIn(playlistIds))
+        ..orderBy([(v) => OrderingTerm.desc(v.id)]);
+      vodItems = await vodQuery.get();
 
-    final seriesQuery = _db.select(_db.tvSeries)
-      ..where((t) => t.playlistId.isIn(playlistIds))
-      ..orderBy([(s) => OrderingTerm.desc(s.id)]);
-    final series = await seriesQuery.get();
+      final seriesQuery = _db.select(_db.tvSeries)
+        ..where((t) => t.playlistId.isIn(playlistIds))
+        ..orderBy([(s) => OrderingTerm.desc(s.id)]);
+      series = await seriesQuery.get();
 
-    final radioQuery = _db.select(_db.radioStations)
-      ..where((t) => t.playlistId.isIn(playlistIds))
-      ..orderBy([(r) => OrderingTerm.desc(r.id)]);
-    final radioStations = await radioQuery.get();
+      final radioQuery = _db.select(_db.radioStations)
+        ..where((t) => t.playlistId.isIn(playlistIds))
+        ..orderBy([(r) => OrderingTerm.desc(r.id)]);
+      radioStations = await radioQuery.get();
+    } catch (e) {
+      debugPrint('[PlaylistLoad] content queries failed: $e');
+    }
+    debugPrint('[PlaylistLoad] content counts: channels=${channels.length}, '
+        'vodItems=${vodItems.length}, series=${series.length}, '
+        'radio=${radioStations.length}');
 
     // Filter out adult content when parental controls are active.
     final filteredChannels = parentalLocked
@@ -252,7 +268,7 @@ class HomeScreenState extends State<HomeScreen> {
       await _entitlementService.refreshTier();
       _tierRefreshed = true;
     }
-    {
+    try {
       final progressEntries =
           await _watchProgressService.getContinueWatching(limit: 10);
       for (final entry in progressEntries) {
@@ -262,16 +278,25 @@ class HomeScreenState extends State<HomeScreen> {
         final item = await _resolveContentItem(rawId);
         if (item != null) continueWatchingItems.add(item);
       }
+    } catch (e) {
+      // Fail-soft: continue watching is optional -- never abort the load.
+      debugPrint('[PlaylistLoad] continue-watching resolution failed: $e');
     }
 
     // Build the "Recommended For You" row from watch history + favourites.
     // Uses the parentally filtered lists so recommendations respect the
     // same restrictions as the other rows.
-    final recommendedItems = await _buildRecommendedItems(
-      vodItems: filteredVod,
-      seriesItems: filteredSeries,
-      channels: filteredChannels,
-    );
+    var recommendedItems = <ContentItem>[];
+    try {
+      recommendedItems = await _buildRecommendedItems(
+        vodItems: filteredVod,
+        seriesItems: filteredSeries,
+        channels: filteredChannels,
+      );
+    } catch (e) {
+      // Fail-soft: recommendations are optional -- never abort the load.
+      debugPrint('[PlaylistLoad] _buildRecommendedItems failed: $e');
+    }
 
     if (mounted) {
       final rows = <ContentRow>[];
@@ -482,6 +507,7 @@ class HomeScreenState extends State<HomeScreen> {
         _isLoading = false;
       });
     }
+    debugPrint('[PlaylistLoad] HomeScreen._loadContent done');
   }
 
   // ---------------------------------------------------------------------------
@@ -644,6 +670,8 @@ class HomeScreenState extends State<HomeScreen> {
     Set<String> genreSignals,
     Set<String> groupSignals,
   ) async {
+    // Normalize: tolerate profile-scoped ids ("<profileId>:type:id").
+    contentId = _stripProfilePrefix(contentId);
     final parts = contentId.split(':');
     if (parts.length != 2) return null;
     final id = int.tryParse(parts[1]);
@@ -730,49 +758,54 @@ class HomeScreenState extends State<HomeScreen> {
       await SupabaseService.initialize();
     } catch (_) {}
 
-    // One-time profile sync: Supabase is deliberately NOT initialized during
-    // app bootstrap (its app_links plugin crashes on Android 16), so the
-    // syncFromCloud() call in app.dart is a no-op. Now that Supabase has been
-    // initialized successfully here, pull cloud profiles once, fire-and-forget.
+    // One-time sync on app open: Supabase is deliberately NOT initialized
+    // during app bootstrap (its app_links plugin crashes on Android 16), so
+    // the syncFromCloud() call in app.dart is a no-op. Now that Supabase has
+    // been initialized successfully here, run the full cloud sync once
+    // (fire-and-forget): profiles first so the cloud profile identities
+    // exist locally, then playlists, favourites, and watch progress restore
+    // per profile. A no-op when nobody is signed in.
     if (SupabaseService.isInitialized && !_profileSyncDone) {
       _profileSyncDone = true;
       // ignore: unawaited_futures
-      ProfileManager.instance.syncFromCloud();
+      SyncCoordinator.maybeFullSync();
     }
 
     String? userId;
     if (SupabaseService.isInitialized) {
       userId = SupabaseService.client.auth.currentUser?.id;
     }
-    // ignore: avoid_print
-    print('[HomeScreen._getUserPlaylistIds] userId=$userId, '
+    debugPrint('[PlaylistLoad] _getUserPlaylistIds: userId=$userId, '
         'supabaseInitialized=${SupabaseService.isInitialized}');
 
     List<Playlist> playlists;
-    if (userId != null) {
-      playlists = await (_db.select(_db.playlists)
-            ..where((t) => t.userId.equals(userId!)))
-          .get();
-    } else {
-      playlists = await (_db.select(_db.playlists)
-            ..where((t) => t.userId.isNull()))
-          .get();
-    }
+    try {
+      if (userId != null) {
+        playlists = await (_db.select(_db.playlists)
+              ..where((t) => t.userId.equals(userId!)))
+            .get();
+      } else {
+        playlists = await (_db.select(_db.playlists)
+              ..where((t) => t.userId.isNull()))
+            .get();
+      }
 
-    // Fallback: if no playlists matched the user filter, try without any
-    // filter. This covers cases where the auth state at query time differs
-    // from the auth state at import time.
-    if (playlists.isEmpty) {
-      // ignore: avoid_print
-      print('[HomeScreen._getUserPlaylistIds] No playlists matched '
-          'userId filter — falling back to ALL playlists');
-      playlists = await (_db.select(_db.playlists)).get();
+      // Fallback: if no playlists matched the user filter, try without any
+      // filter. This covers cases where the auth state at query time differs
+      // from the auth state at import time.
+      if (playlists.isEmpty) {
+        debugPrint('[PlaylistLoad] no playlists matched userId filter — '
+            'falling back to ALL playlists');
+        playlists = await (_db.select(_db.playlists)).get();
+      }
+    } catch (e) {
+      // Fail-soft: a transient DB error must never abort content loading.
+      debugPrint('[PlaylistLoad] playlist query failed: $e');
+      playlists = [];
     }
 
     final ids = playlists.map((p) => p.id).toList();
-    // ignore: avoid_print
-    print('[HomeScreen._getUserPlaylistIds] Returning ${ids.length} '
-        'playlist IDs: $ids');
+    debugPrint('[PlaylistLoad] returning ${ids.length} playlist IDs: $ids');
     return ids;
   }
 

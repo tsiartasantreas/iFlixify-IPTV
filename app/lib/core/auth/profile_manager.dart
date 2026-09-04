@@ -190,6 +190,53 @@ class ProfileManager {
     return 0xFF000000 | rgb; // Add full alpha.
   }
 
+  // ---------------------------------------------------------------------------
+  // Scoped content-id helpers + local <-> cloud profile id mapping
+  // ---------------------------------------------------------------------------
+
+  /// Splits a profile-scoped content id into `(profileKey, rawId)`.
+  ///
+  /// Locally, content ids are scoped as `"<localProfileId>:<rawId>"` where
+  /// rawId is itself polymorphic (e.g. `"vod:42"`). A legacy unscoped id
+  /// (e.g. `"vod:42"`, or one with no recognizable profile prefix) is
+  /// returned unchanged with profileKey `'default'`.
+  static (String, String) splitScopedId(String contentId) {
+    final i = contentId.indexOf(':');
+    if (i <= 0) return ('default', contentId);
+    final head = contentId.substring(0, i);
+    if (head == 'default' || int.tryParse(head) != null) {
+      return (head, contentId.substring(i + 1));
+    }
+    return ('default', contentId);
+  }
+
+  /// Resolves any locally scoped content id to `(profileId, rawId)` where
+  /// profileId 0 means "default / unknown profile" (legacy unscoped ids and
+  /// `'default'` prefixes) and >0 is the local profile id.
+  static (int, String) resolveScopedId(String contentId) {
+    final (head, raw) = splitScopedId(contentId);
+    return (int.tryParse(head) ?? 0, raw);
+  }
+
+  /// Maps every local profile id to its cloud profile id.
+  ///
+  /// Invariant (see [syncToCloud] / [syncFromCloud]): cloud rows in
+  /// `user_profiles` are upserted with `profile_id = local id`, and cloud
+  /// pulls insert new local rows keyed by the cloud `profile_id` (preserved,
+  /// never regenerated). The mapping is therefore the identity per user,
+  /// which is what makes profile-scoped cloud rows portable across devices.
+  Future<Map<int, int>> localToCloudIdMap() async {
+    final profiles = await getProfiles();
+    return {for (final p in profiles) p.id: p.id};
+  }
+
+  /// Returns the cloud profile id for [localId], or `null` when no local
+  /// profile with that id exists. See [localToCloudIdMap] for the identity
+  /// invariant that makes local and cloud profile ids interchangeable.
+  Future<int?> cloudProfileIdForLocal(int localId) async {
+    return (await localToCloudIdMap())[localId];
+  }
+
   /// Uploads all local profiles to Supabase `user_profiles` table.
   ///
   /// Requires an authenticated user. Errors are logged but not thrown

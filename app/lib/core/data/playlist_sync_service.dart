@@ -57,6 +57,9 @@ class PlaylistSyncService {
         final decryptedPassword = _playlistManager.getDecryptedPassword(p);
         return {
           'user_id': userId,
+          // Playlists are not profile-scoped locally yet; profile_id 0 is
+          // the shared/default bucket (see migration 00009).
+          'profile_id': 0,
           'playlist_id': p.id.toString(),
           'name': p.name,
           'url': EncryptionService.encrypt(
@@ -77,6 +80,25 @@ class PlaylistSyncService {
       await client
           .from('playlists_sync')
           .upsert(rows, onConflict: 'user_id,playlist_id');
+
+      // Reconcile deletions: cloud playlists that no longer exist locally
+      // (deleted on this device) are removed so [syncFromCloud] cannot
+      // re-insert them. Safe because of the playlists.isEmpty early-return
+      // above — a device with no local playlists can never wipe the cloud
+      // copy — and because [fullSync] always pulls before pushing.
+      final localIds = playlists.map((p) => p.id.toString()).toSet();
+      final cloudRows = await client
+          .from('playlists_sync')
+          .select('playlist_id')
+          .eq('user_id', userId);
+      for (final row in cloudRows) {
+        final cloudId = row['playlist_id'] as String?;
+        if (cloudId == null || localIds.contains(cloudId)) continue;
+        await client.from('playlists_sync').delete().match({
+          'user_id': userId,
+          'playlist_id': cloudId,
+        });
+      }
     } catch (e) {
       // ignore: avoid_print
       print('[PlaylistSyncService] syncToCloud failed: $e');
