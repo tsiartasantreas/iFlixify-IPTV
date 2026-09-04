@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../app.dart' show routeObserver;
+import '../../core/config/tv_mode.dart';
 import '../../core/theme/app_colors.dart';
 import '../browse/browse_screen.dart';
 import '../favorites/favorites_screen.dart';
@@ -18,8 +18,9 @@ import 'tv_left_rail.dart';
 ///
 /// Mobile layout: six-tab bottom navigation bar.
 /// TV layout: ten-item left vertical rail.
-/// TV mode is detected via screen shortest side exceeding 960 px on Android
-/// or always on Linux.
+/// TV mode is controlled by the shared [TvMode] single source of truth
+/// (the user's "TV Mode" toggle in Settings); device size heuristics are
+/// no longer used here.
 class MainShell extends StatefulWidget {
   const MainShell({super.key});
 
@@ -35,7 +36,6 @@ class _MainShellState extends State<MainShell> with RouteAware {
   /// `_loadPreferences`). Using `true` here made the Radio tab flash on
   /// first boot even though the preference defaults to hidden.
   bool _showRadioTab = false;
-  bool _tvModeEnabled = false;
 
   /// False until preferences have been read at least once. The shell must
   /// not build its tab layout with defaults while the async read is in
@@ -47,16 +47,29 @@ class _MainShellState extends State<MainShell> with RouteAware {
   /// Child screens listen to this to know when to refresh their data.
   final _tabChangeNotifier = ValueNotifier<int>(0);
 
+  /// Focus node for the TV content pane. The rail hands focus here when the
+  /// user presses Right, so D-pad navigation continues in the content grid.
+  final FocusNode _contentFocusNode = FocusNode(debugLabel: 'tv-content-pane');
+
   /// Whether the UI should use the TV layout.
   ///
-  /// Controlled exclusively by the user's "TV Mode" toggle in Settings.
+  /// Read from the shared [TvMode] single source of truth, which is loaded
+  /// at app startup and updated (and persisted) by the Settings toggle.
   /// Foldable devices and large tablets no longer auto-switch to TV mode.
-  bool get _isTv => _tvModeEnabled;
+  bool get _isTv => TvMode.instance.isEnabled;
 
   @override
   void initState() {
     super.initState();
+    // Rebuild whenever the shared TV-mode state changes (Settings toggle).
+    TvMode.instance.addListener(_onTvModeChanged);
     _loadPreferences();
+  }
+
+  /// Called when the shared [TvMode] notifier fires.
+  void _onTvModeChanged() {
+    if (!mounted) return;
+    setState(() {});
   }
 
   @override
@@ -67,7 +80,9 @@ class _MainShellState extends State<MainShell> with RouteAware {
 
   @override
   void dispose() {
+    TvMode.instance.removeListener(_onTvModeChanged);
     _tabChangeNotifier.dispose();
+    _contentFocusNode.dispose();
     routeObserver.unsubscribe(this);
     super.dispose();
   }
@@ -81,14 +96,14 @@ class _MainShellState extends State<MainShell> with RouteAware {
 
   /// Loads user preferences that affect the shell layout.
   ///
-  /// Called on init and when returning from settings so changes to display
-  /// mode or radio tab visibility take effect immediately.
+  /// Called on init and when returning from settings so changes to radio
+  /// tab visibility take effect immediately. TV mode itself is owned by the
+  /// shared [TvMode] notifier, which the Settings toggle updates directly.
   Future<void> _loadPreferences() async {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
     setState(() {
       _showRadioTab = prefs.getBool('show_radio_tab') ?? false;
-      _tvModeEnabled = prefs.getBool('tv_mode_enabled') ?? false;
       _prefsLoaded = true;
 
       // Keep the selected tab valid when the tab count changes. Hiding the
@@ -222,6 +237,7 @@ class _MainShellState extends State<MainShell> with RouteAware {
           title: 'Series',
           tabChangeNotifier: _tabChangeNotifier,
           tabIndex: index,
+          isTv: true,
         );
       case 2: // Movies
         return BrowseScreen(
@@ -229,6 +245,7 @@ class _MainShellState extends State<MainShell> with RouteAware {
           title: 'Movies',
           tabChangeNotifier: _tabChangeNotifier,
           tabIndex: index,
+          isTv: true,
         );
       case 3: // Live TV
         return BrowseScreen(
@@ -236,6 +253,7 @@ class _MainShellState extends State<MainShell> with RouteAware {
           title: 'Live TV',
           tabChangeNotifier: _tabChangeNotifier,
           tabIndex: index,
+          isTv: true,
         );
       case 4: // Radio
         return BrowseScreen(
@@ -243,6 +261,7 @@ class _MainShellState extends State<MainShell> with RouteAware {
           title: 'Radio',
           tabChangeNotifier: _tabChangeNotifier,
           tabIndex: index,
+          isTv: true,
         );
       case 5: // My List
         return FavoritesScreen(
@@ -323,32 +342,31 @@ class _MainShellState extends State<MainShell> with RouteAware {
   }
 
   Widget _buildTvLayout() {
-    return FocusTraversalGroup(
-      child: Focus(
-        autofocus: true,
-        onKeyEvent: (node, event) {
-          // Handle global Back button on TV remote to exit the app gracefully.
-          if (event is KeyDownEvent &&
-              event.logicalKey == LogicalKeyboardKey.goBack) {
-            // Let the system handle back navigation.
-            return KeyEventResult.ignored;
-          }
-          return KeyEventResult.ignored;
-        },
-        child: Scaffold(
-          backgroundColor: AppColors.bgBase,
-          body: Row(
-            children: [
-              TvLeftRail(
-                currentIndex: _tvIndex,
-                onTap: _onTabChanged,
-              ),
-              Expanded(
+    return Scaffold(
+      backgroundColor: AppColors.bgBase,
+      body: Row(
+        children: [
+          // Rail gets its own traversal group so default traversal never
+          // spills into (or comes from) the content pane.
+          FocusTraversalGroup(
+            child: TvLeftRail(
+              currentIndex: _tvIndex,
+              onTap: _onTabChanged,
+              onFocusContent: () => _contentFocusNode.requestFocus(),
+            ),
+          ),
+          // Content pane gets its own traversal group too. Requesting focus
+          // on _contentFocusNode lands inside this group and the default
+          // traversal moves it to the first focusable card.
+          Expanded(
+            child: FocusTraversalGroup(
+              child: Focus(
+                focusNode: _contentFocusNode,
                 child: _buildTvTab(_tvIndex),
               ),
-            ],
+            ),
           ),
-        ),
+        ],
       ),
     );
   }

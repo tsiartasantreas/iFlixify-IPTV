@@ -1,8 +1,7 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../core/config/tv_mode.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/animated_focus.dart';
 import '../../../core/widgets/favorite_button.dart';
@@ -18,6 +17,7 @@ class ContentCard extends StatelessWidget {
     this.isTv = false,
     this.onTap,
     this.autofocus = false,
+    this.focusNode,
     this.contentId,
     this.contentType,
     this.url,
@@ -29,6 +29,10 @@ class ContentCard extends StatelessWidget {
   final VoidCallback? onTap;
   final bool autofocus;
 
+  /// Focus node to attach to the card's TV focus wrapper, allowing the
+  /// parent to request focus on this card programmatically.
+  final FocusNode? focusNode;
+
   /// Polymorphic ID for favourites (e.g. `"vod:42"`).
   final String? contentId;
 
@@ -38,15 +42,12 @@ class ContentCard extends StatelessWidget {
   /// Stream URL for favourites.
   final String? url;
 
-  bool get _isTv =>
-      isTv ||
-      Platform.isLinux ||
-      (Platform.isAndroid &&
-          MediaQueryData.fromView(
-                      WidgetsBinding.instance.platformDispatcher.views.first)
-                  .size
-                  .shortestSide >
-              600);
+  /// Whether this card should render with TV focus behaviour.
+  ///
+  /// True when the caller explicitly passes [isTv] OR when the shared
+  /// [TvMode] single source of truth is enabled (replaces the old
+  /// shortestSide > 600 device heuristic).
+  bool _resolveIsTv(BuildContext context) => isTv || TvModeScope.of(context);
 
   @override
   Widget build(BuildContext context) {
@@ -121,16 +122,22 @@ class ContentCard extends StatelessWidget {
       ),
     );
 
-    if (_isTv) {
+    if (_resolveIsTv(context)) {
       return AnimatedFocus(
         isTv: true,
         child: Focus(
           autofocus: autofocus,
+          focusNode: focusNode,
           onKeyEvent: (node, event) {
-            if (event is KeyDownEvent &&
-                event.logicalKey == LogicalKeyboardKey.select) {
-              onTap?.call();
-              return KeyEventResult.handled;
+            if (event is KeyDownEvent || event is KeyRepeatEvent) {
+              final key = event.logicalKey;
+              if (key == LogicalKeyboardKey.select ||
+                  key == LogicalKeyboardKey.enter ||
+                  key == LogicalKeyboardKey.space ||
+                  key == LogicalKeyboardKey.gameButtonA) {
+                onTap?.call();
+                return KeyEventResult.handled;
+              }
             }
             return KeyEventResult.ignored;
           },

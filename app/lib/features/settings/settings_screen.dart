@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/auth/auth_service.dart';
 import '../../core/auth/profile_manager.dart';
+import '../../core/config/tv_mode.dart';
 import '../../core/data/database.dart';
 import '../../core/data/offline_download_service.dart';
 import '../../core/data/parental_control_service.dart';
@@ -516,8 +517,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             value: _tvModeEnabled,
             onChanged: (value) async {
               setState(() => _tvModeEnabled = value);
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.setBool('tv_mode_enabled', value);
+              // Single source of truth: persists the preference AND notifies
+              // listeners (MainShell, screens) so the layout switches live.
+              await TvMode.instance.setEnabled(value);
             },
           ),
 

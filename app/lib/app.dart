@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
 import 'core/auth/profile_manager.dart';
+import 'core/config/tv_mode.dart';
 import 'core/entitlement/entitlement_service.dart';
 import 'core/purchase/purchase_service.dart';
 import 'core/theme/app_colors.dart';
@@ -37,6 +38,10 @@ class _FlixiumAppState extends State<FlixiumApp> {
   }
 
   Future<void> _bootstrap() async {
+    // Load TV mode (single source of truth) before the shell renders so the
+    // first frame already reflects the persisted display-mode preference.
+    await TvMode.instance.load();
+
     // Ensure a default profile exists for first-time users.
     try {
       await ProfileManager.instance.ensureDefaultProfile();
@@ -91,7 +96,10 @@ class _FlixiumAppState extends State<FlixiumApp> {
                   setState(() => _showOnboarding = false);
                 },
               )
-            : const MainShell(),
+            : TvModeScope(
+                notifier: TvMode.instance,
+                child: const MainShell(),
+              ),
       ),
     );
   }

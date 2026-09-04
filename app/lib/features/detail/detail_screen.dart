@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../core/config/tv_mode.dart';
 import '../../core/data/database.dart';
 import '../../core/data/offline_download_service.dart';
 import '../../core/data/playlist_manager.dart';
@@ -58,19 +59,40 @@ class _DetailScreenState extends State<DetailScreen> {
   VodItem? _vodItem;
   TvSery? _seriesData;
 
-  bool get _isTv =>
-      Platform.isLinux ||
-      (Platform.isAndroid &&
-          MediaQueryData.fromView(
-                      WidgetsBinding.instance.platformDispatcher.views.first)
-                  .size
-                  .shortestSide >
-              960);
+  /// The node that had primary focus before the player route was pushed, so
+  /// D-pad focus can be restored when it pops (TV mode).
+  FocusNode? _lastFocusedNode;
+
+  /// Focus node on the main play button — the fallback focus target when
+  /// returning from the player.
+  final FocusNode _playButtonFocusNode = FocusNode();
+
+  /// Whether the UI should use the TV layout.
+  ///
+  /// Synced from the shared [TvMode] single source of truth in
+  /// [didChangeDependencies]; InheritedNotifier re-runs it reactively when
+  /// the Settings toggle changes TV mode. Replaces the old per-screen
+  /// shortestSide > 960 heuristic.
+  bool _isTv = false;
 
   bool get _isLive => widget.contentType == 'live';
   bool get _isSeries => widget.contentType == 'series';
 
   bool get _isVod => widget.contentType == 'vod';
+
+  @override
+  void dispose() {
+    _playButtonFocusNode.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Sync with the shared TV-mode state. InheritedNotifier notifies
+    // dependents when TvMode changes, so this re-runs reactively.
+    _isTv = TvModeScope.of(context);
+  }
 
   @override
   void initState() {
@@ -483,9 +505,37 @@ class _DetailScreenState extends State<DetailScreen> {
           );
 
     if (!mounted) return;
+    // Remember the focused node so D-pad focus can be restored on pop.
+    _lastFocusedNode = FocusManager.instance.primaryFocus;
     Navigator.of(context)
         .push(MaterialPageRoute(builder: (_) => playerScreen))
-        .then((_) => controller.dispose());
+        .then((_) {
+      controller.dispose();
+      _restoreTvFocus();
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // TV focus restoration
+  // ---------------------------------------------------------------------------
+
+  /// Restores D-pad focus after the player route pops.
+  ///
+  /// The popped route owned the focused node, so focus is lost. Re-requests
+  /// focus on the node that had focus before the push, falling back to the
+  /// main play button.
+  void _restoreTvFocus() {
+    if (!_isTv || !mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final node = _lastFocusedNode;
+      if (node != null && node.canRequestFocus) {
+        node.requestFocus();
+      } else {
+        _playButtonFocusNode.requestFocus();
+      }
+      _lastFocusedNode = null;
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -747,20 +797,26 @@ class _DetailScreenState extends State<DetailScreen> {
                             child: SizedBox(
                               height: 50,
                               child: Focus(
+                                focusNode: _playButtonFocusNode,
                                 onKeyEvent: (node, event) {
-                                  if (event is KeyDownEvent &&
-                                      event.logicalKey ==
-                                          LogicalKeyboardKey.select) {
-                                    _playContent(
-                                      widget.url,
-                                      widget.title,
-                                      isLive: _isLive,
-                                      contentId:
-                                          '${widget.contentType}_${widget.id}',
-                                      watchContentId:
-                                          '${widget.contentType}:${widget.id}',
-                                    );
-                                    return KeyEventResult.handled;
+                                  if (event is KeyDownEvent ||
+                                      event is KeyRepeatEvent) {
+                                    final key = event.logicalKey;
+                                    if (key == LogicalKeyboardKey.select ||
+                                        key == LogicalKeyboardKey.enter ||
+                                        key == LogicalKeyboardKey.space ||
+                                        key == LogicalKeyboardKey.gameButtonA) {
+                                      _playContent(
+                                        widget.url,
+                                        widget.title,
+                                        isLive: _isLive,
+                                        contentId:
+                                            '${widget.contentType}_${widget.id}',
+                                        watchContentId:
+                                            '${widget.contentType}:${widget.id}',
+                                      );
+                                      return KeyEventResult.handled;
+                                    }
                                   }
                                   return KeyEventResult.ignored;
                                 },
@@ -1277,15 +1333,20 @@ class _DetailScreenState extends State<DetailScreen> {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       child: Focus(
         onKeyEvent: (node, event) {
-          if (event is KeyDownEvent &&
-              event.logicalKey == LogicalKeyboardKey.select) {
-            _playContent(
-              episode.url,
-              episode.title,
-              contentId: episodeContentId,
-              watchContentId: 'episode:${episode.id}',
-            );
-            return KeyEventResult.handled;
+          if (event is KeyDownEvent || event is KeyRepeatEvent) {
+            final key = event.logicalKey;
+            if (key == LogicalKeyboardKey.select ||
+                key == LogicalKeyboardKey.enter ||
+                key == LogicalKeyboardKey.space ||
+                key == LogicalKeyboardKey.gameButtonA) {
+              _playContent(
+                episode.url,
+                episode.title,
+                contentId: episodeContentId,
+                watchContentId: 'episode:${episode.id}',
+              );
+              return KeyEventResult.handled;
+            }
           }
           return KeyEventResult.ignored;
         },

@@ -4,11 +4,13 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../app.dart' show routeObserver;
+import '../../core/config/tv_mode.dart';
 import '../../core/data/database.dart';
 import '../../core/data/import_progress_service.dart';
 import '../../core/data/parental_control_service.dart';
 import '../../core/data/supabase_client.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/widgets/animated_focus.dart';
 import '../../core/widgets/favorite_button.dart';
 import '../../core/widgets/pin_dialog.dart';
 import '../detail/detail_screen.dart';
@@ -27,10 +29,15 @@ class BrowseScreen extends StatefulWidget {
     required this.title,
     this.tabChangeNotifier,
     this.tabIndex = 0,
+    this.isTv = false,
   });
 
   /// Content type: "live", "vod", "series", or "radio".
   final String contentType;
+
+  /// Whether this screen is rendered inside the TV layout. Enables D-pad
+  /// focus visuals (focus ring / scale) on the item cards via [AnimatedFocus].
+  final bool isTv;
 
   /// Display title for the app bar.
   final String title;
@@ -65,6 +72,10 @@ class BrowseScreenState extends State<BrowseScreen> with RouteAware {
 
   /// Map from EPG channelId to the current programme title.
   Map<String, String> _epgCurrentTitles = {};
+
+  /// Whether this screen is rendered inside the TV layout. Reads the global
+  /// [TvMode] scope, falling back to the explicit [BrowseScreen.isTv] prop.
+  bool get _isTv => widget.isTv || TvModeScope.of(context);
 
   @override
   void initState() {
@@ -589,13 +600,18 @@ class BrowseScreenState extends State<BrowseScreen> with RouteAware {
   Widget _buildListItem(_BrowseItem item, {bool autofocus = false}) {
     final epgTitle = _epgTitleForItem(item);
 
-    return Focus(
+    final card = Focus(
       autofocus: autofocus,
       onKeyEvent: (node, event) {
-        if (event is KeyDownEvent &&
-            event.logicalKey == LogicalKeyboardKey.select) {
-          _navigateToDetail(item);
-          return KeyEventResult.handled;
+        if (event is KeyDownEvent || event is KeyRepeatEvent) {
+          final key = event.logicalKey;
+          if (key == LogicalKeyboardKey.select ||
+              key == LogicalKeyboardKey.enter ||
+              key == LogicalKeyboardKey.space ||
+              key == LogicalKeyboardKey.gameButtonA) {
+            _navigateToDetail(item);
+            return KeyEventResult.handled;
+          }
         }
         return KeyEventResult.ignored;
       },
@@ -705,6 +721,11 @@ class BrowseScreenState extends State<BrowseScreen> with RouteAware {
         ),
       ),
     );
+
+    if (_isTv) {
+      return AnimatedFocus(isTv: true, child: card);
+    }
+    return card;
   }
 
   // ---------------------------------------------------------------------------
@@ -731,10 +752,15 @@ class BrowseScreenState extends State<BrowseScreen> with RouteAware {
       padding: const EdgeInsets.only(right: 8),
       child: Focus(
         onKeyEvent: (node, event) {
-          if (event is KeyDownEvent &&
-              event.logicalKey == LogicalKeyboardKey.select) {
-            _filterByGroup(group);
-            return KeyEventResult.handled;
+          if (event is KeyDownEvent || event is KeyRepeatEvent) {
+            final key = event.logicalKey;
+            if (key == LogicalKeyboardKey.select ||
+                key == LogicalKeyboardKey.enter ||
+                key == LogicalKeyboardKey.space ||
+                key == LogicalKeyboardKey.gameButtonA) {
+              _filterByGroup(group);
+              return KeyEventResult.handled;
+            }
           }
           return KeyEventResult.ignored;
         },
@@ -762,13 +788,18 @@ class BrowseScreenState extends State<BrowseScreen> with RouteAware {
   Widget _buildItemCard(_BrowseItem item, {bool autofocus = false}) {
     final epgTitle = _epgTitleForItem(item);
 
-    return Focus(
+    final card = Focus(
       autofocus: autofocus,
       onKeyEvent: (node, event) {
-        if (event is KeyDownEvent &&
-            event.logicalKey == LogicalKeyboardKey.select) {
-          _navigateToDetail(item);
-          return KeyEventResult.handled;
+        if (event is KeyDownEvent || event is KeyRepeatEvent) {
+          final key = event.logicalKey;
+          if (key == LogicalKeyboardKey.select ||
+              key == LogicalKeyboardKey.enter ||
+              key == LogicalKeyboardKey.space ||
+              key == LogicalKeyboardKey.gameButtonA) {
+            _navigateToDetail(item);
+            return KeyEventResult.handled;
+          }
         }
         return KeyEventResult.ignored;
       },
@@ -862,6 +893,11 @@ class BrowseScreenState extends State<BrowseScreen> with RouteAware {
         ),
       ),
     );
+
+    if (_isTv) {
+      return AnimatedFocus(isTv: true, child: card);
+    }
+    return card;
   }
 
   Widget _buildPlaceholder() {

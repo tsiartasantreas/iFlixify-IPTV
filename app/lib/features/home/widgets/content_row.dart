@@ -14,6 +14,7 @@ class ContentRow extends StatelessWidget {
     this.isTv = false,
     this.onSeeAll,
     this.autofocusFirst = false,
+    this.firstCardFocusNode,
   });
 
   /// Section header label (e.g. "Live TV").
@@ -30,6 +31,10 @@ class ContentRow extends StatelessWidget {
 
   /// Whether the first card in this row should auto-focus (for TV D-pad).
   final bool autofocusFirst;
+
+  /// Focus node attached to the first card, so the parent can re-request
+  /// TV focus on it programmatically (e.g. after a pushed route pops).
+  final FocusNode? firstCardFocusNode;
 
   @override
   Widget build(BuildContext context) {
@@ -80,6 +85,7 @@ class ContentRow extends StatelessWidget {
                 imageUrl: item.imageUrl,
                 isTv: isTv,
                 autofocus: autofocusFirst && index == 0,
+                focusNode: index == 0 ? firstCardFocusNode : null,
                 onTap: item.onTap,
                 contentId: item.contentId,
                 contentType: item.contentType,

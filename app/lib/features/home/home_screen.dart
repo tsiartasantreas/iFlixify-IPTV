@@ -1,9 +1,8 @@
-import 'dart:io';
-
 import 'package:drift/drift.dart' show OrderingTerm;
 import 'package:flutter/material.dart';
 
 import '../../core/auth/profile_manager.dart';
+import '../../core/config/tv_mode.dart';
 import '../../core/data/database.dart';
 import '../../core/data/favorites_service.dart';
 import '../../core/data/import_progress_service.dart';
@@ -67,20 +66,27 @@ class HomeScreenState extends State<HomeScreen> {
   /// the tab actually changes (not on the initial build).
   int _lastSeenChangeCount = 0;
 
+  /// The node that had primary focus before a detail route was pushed, so
+  /// D-pad focus can be restored when the route pops (TV mode).
+  FocusNode? _lastFocusedNode;
+
+  /// Focus node attached to the first card of the first content row. Used
+  /// as a fallback target when restoring TV focus after a route pop.
+  late final FocusNode _firstCardFocusNode = FocusNode();
+
   /// Whether the entitlement tier has been fetched at least once.
   ///
   /// [EntitlementService.isPro] is a synchronous getter over a cached tier
   /// that starts as `'free'`; without an explicit refresh the Continue
   /// Watching row would never load even for Pro users.
   bool _tierRefreshed = false;
-  bool get _isTv =>
-      Platform.isLinux ||
-      (Platform.isAndroid &&
-          MediaQueryData.fromView(
-                      WidgetsBinding.instance.platformDispatcher.views.first)
-                  .size
-                  .shortestSide >
-              600);
+
+  /// Whether the UI should use the TV layout.
+  ///
+  /// Synced from the shared [TvMode] single source of truth in
+  /// [didChangeDependencies]; InheritedNotifier re-runs it reactively when
+  /// the Settings toggle changes TV mode.
+  bool _isTv = false;
 
   @override
   void initState() {
@@ -96,13 +102,17 @@ class HomeScreenState extends State<HomeScreen> {
   void dispose() {
     widget.tabChangeNotifier?.removeListener(_onTabChange);
     _importProgress.progressNotifier.removeListener(_onImportProgressChanged);
+    _firstCardFocusNode.dispose();
     super.dispose();
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // No-op: content is loaded in initState and explicitly after navigation.
+    // Sync with the shared TV-mode state. InheritedNotifier notifies
+    // dependents when TvMode changes, so this re-runs reactively. Content
+    // loading stays in initState and explicit refresh calls.
+    _isTv = TvModeScope.of(context);
   }
 
   /// Called whenever the background import progress changes.
@@ -268,7 +278,10 @@ class HomeScreenState extends State<HomeScreen> {
         rows.add(ContentRow(
           label: 'Movies',
           isTv: _isTv,
-          autofocusFirst: _isTv && isFirstRow,
+          autofocusFirst: _isTv &&
+              isFirstRow &&
+              FocusManager.instance.primaryFocus == null,
+          firstCardFocusNode: _isTv && isFirstRow ? _firstCardFocusNode : null,
           items: filteredVod.take(20).map((vod) {
             return ContentItem(
               title: vod.title,
@@ -296,7 +309,9 @@ class HomeScreenState extends State<HomeScreen> {
         rows.add(ContentRow(
           label: 'Series',
           isTv: _isTv,
-          autofocusFirst: _isTv && isFirstRow,
+          autofocusFirst: _isTv &&
+              isFirstRow &&
+              FocusManager.instance.primaryFocus == null,
           items: filteredSeries.take(20).map((s) {
             return ContentItem(
               title: s.title,
@@ -322,7 +337,9 @@ class HomeScreenState extends State<HomeScreen> {
         rows.add(ContentRow(
           label: 'Live TV',
           isTv: _isTv,
-          autofocusFirst: _isTv && isFirstRow,
+          autofocusFirst: _isTv &&
+              isFirstRow &&
+              FocusManager.instance.primaryFocus == null,
           items: filteredChannels.take(20).map((ch) {
             return ContentItem(
               title: ch.name,
@@ -350,7 +367,9 @@ class HomeScreenState extends State<HomeScreen> {
         rows.add(ContentRow(
           label: 'Radio',
           isTv: _isTv,
-          autofocusFirst: _isTv && isFirstRow,
+          autofocusFirst: _isTv &&
+              isFirstRow &&
+              FocusManager.instance.primaryFocus == null,
           items: radioStations.take(20).map((radio) {
             return ContentItem(
               title: radio.name,
@@ -433,7 +452,9 @@ class HomeScreenState extends State<HomeScreen> {
         rows.add(ContentRow(
           label: 'Recently Added',
           isTv: _isTv,
-          autofocusFirst: _isTv && isFirstRow,
+          autofocusFirst: _isTv &&
+              isFirstRow &&
+              FocusManager.instance.primaryFocus == null,
           items: recentItems.take(20).map((item) {
             return ContentItem(
               title: item.title,
@@ -876,6 +897,8 @@ class HomeScreenState extends State<HomeScreen> {
     String? groupTitle,
     required String contentType,
   }) {
+    // Remember the focused node so D-pad focus can be restored on pop.
+    _lastFocusedNode = FocusManager.instance.primaryFocus;
     Navigator.of(context)
         .push(
       MaterialPageRoute(
@@ -889,9 +912,11 @@ class HomeScreenState extends State<HomeScreen> {
         ),
       ),
     )
-        .then((_) {
-      // Reload content in case data changed.
-      _loadContent();
+        .then((_) async {
+      // Reload content in case data changed, then restore TV focus once the
+      // resulting rebuild has settled.
+      await _loadContent();
+      _restoreTvFocus();
     });
   }
 
@@ -922,6 +947,8 @@ class HomeScreenState extends State<HomeScreen> {
     final rawContentId = _stripProfilePrefix(fav.contentId);
     final parts = rawContentId.split(':');
     final id = parts.length == 2 ? int.tryParse(parts[1]) ?? 0 : 0;
+    // Remember the focused node so D-pad focus can be restored on pop.
+    _lastFocusedNode = FocusManager.instance.primaryFocus;
     Navigator.of(context)
         .push(
       MaterialPageRoute(
@@ -934,7 +961,47 @@ class HomeScreenState extends State<HomeScreen> {
         ),
       ),
     )
-        .then((_) => _loadContent());
+        .then((_) async {
+      await _loadContent();
+      _restoreTvFocus();
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // TV focus restoration
+  // ---------------------------------------------------------------------------
+
+  /// Restores D-pad focus after a pushed route (e.g. DetailScreen) pops.
+  ///
+  /// Focus is lost because the popped route owned the focused node, and
+  /// `autofocus` only fires when a node first attaches. Re-requests focus on
+  /// the node that had focus before the push, falling back to the first card
+  /// of the first content row.
+  void _restoreTvFocus() {
+    if (!_isTv || !mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final node = _lastFocusedNode;
+      if (node != null && node.canRequestFocus) {
+        node.requestFocus();
+      } else {
+        _requestInitialTvFocus();
+      }
+      _lastFocusedNode = null;
+    });
+  }
+
+  /// Requests focus on the first card of the first content row (TV fallback).
+  void _requestInitialTvFocus() {
+    if (!mounted) return;
+    FocusScope.of(context).unfocus();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final node = _firstCardFocusNode;
+      if (node.canRequestFocus) {
+        node.requestFocus();
+      }
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -1271,7 +1338,8 @@ class HomeScreenState extends State<HomeScreen> {
                 child: ContentRow(
                   label: 'Favorites',
                   isTv: _isTv,
-                  autofocusFirst: _isTv,
+                  autofocusFirst: _isTv &&
+                      FocusManager.instance.primaryFocus == null,
                   items: _favorites.take(20).map((fav) {
                     return ContentItem(
                       title: fav.title ?? 'Untitled',
