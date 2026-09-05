@@ -51,6 +51,12 @@ class ResumeHelper {
   /// up (120 polls = 30 s — e.g. a dead stream that never loads).
   static const int _maxDurationWaitPolls = 120;
 
+  /// Hard failsafe: no matter what phase the machine is stuck in, the resume
+  /// is abandoned and playback is force-started after this long. This makes
+  /// it impossible for [isActive] (and therefore the screen's play/pause
+  /// gating) to outlive a bounded 20 s window.
+  static const Duration _failsafeTimeout = Duration(seconds: 20);
+
   final PlayerController _controller;
   final String tag;
 
@@ -59,6 +65,7 @@ class ResumeHelper {
   Duration _target;
 
   Timer? _pollTimer;
+  Timer? _failsafeTimer;
   bool _active = false;
   bool _succeeded = false;
 
@@ -79,18 +86,41 @@ class ResumeHelper {
   bool get succeeded => _succeeded;
 
   /// Starts the poll loop. Safe to call more than once.
+  ///
+  /// Fully inert when there is no meaningful target (<= 0): no timer is
+  /// armed and [isActive] never becomes true, so the owning screen's
+  /// play/pause gating can never engage for a non-resume playback.
   void start() {
     if (_active) return;
+    if (_target <= Duration.zero) {
+      // ignore: avoid_print
+      print('$tag start ignored — no resume target (inert)');
+      return;
+    }
     _active = true;
     // ignore: avoid_print
     print('$tag start target=${_target.inSeconds}s');
     _pollTimer = Timer.periodic(_pollInterval, (_) => _tick());
+    // Hard failsafe: whatever phase we are stuck in (no duration, seek never
+    // verifying, …), abandon the resume and force playback after 20 s so the
+    // user can never be left staring at a paused player with play/pause
+    // gated.
+    _failsafeTimer?.cancel();
+    _failsafeTimer = Timer(_failsafeTimeout, () {
+      if (!_active) return;
+      // ignore: avoid_print
+      print('$tag FAILSAFE — 20 s elapsed, abandoning resume and forcing '
+          'play()');
+      _finish(success: false);
+    });
   }
 
   /// Stops the loop without any playback side effects (used on dispose).
   void dispose() {
     _pollTimer?.cancel();
     _pollTimer = null;
+    _failsafeTimer?.cancel();
+    _failsafeTimer = null;
     _active = false;
   }
 
@@ -192,6 +222,8 @@ class ResumeHelper {
     _active = false;
     _pollTimer?.cancel();
     _pollTimer = null;
+    _failsafeTimer?.cancel();
+    _failsafeTimer = null;
     if (!_controller.isPlaying) {
       // ignore: avoid_print
       print('$tag playing');

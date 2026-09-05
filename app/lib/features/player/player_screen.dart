@@ -177,19 +177,26 @@ class _PlayerScreenState extends State<PlayerScreen> {
         (_) => _saveWatchProgress(),
       );
       widget.controller.addListener(_onPlayerChanged);
-      if (widget.startPosition != null &&
-          widget.startPosition! > Duration.zero) {
-        // Opened paused (the caller used open(autoPlay: false)); start the
-        // resume state machine. It waits for a trustworthy duration, seeks
-        // once, verifies the seek landed, and only then calls play(). While
-        // it is active, watch-progress saving is suppressed (see
-        // [_saveWatchProgress]) and manual play/pause is gated.
-        _resume = ResumeHelper(
-          controller: widget.controller,
-          target: widget.startPosition!,
-          tag: '[Resume]',
-        )..start();
-      }
+    }
+    if (widget.startPosition != null &&
+        widget.startPosition! > Duration.zero) {
+      // Opened paused (the caller used open(autoPlay: false)); start the
+      // resume state machine. It waits for a trustworthy duration, seeks
+      // once, verifies the seek landed, and only then calls play(). While
+      // it is active, watch-progress saving is suppressed (see
+      // [_saveWatchProgress]) and manual play/pause is gated.
+      //
+      // NOTE: deliberately NOT nested inside the `_recordsProgress` block —
+      // a paused open MUST always get a resume driver, otherwise the player
+      // would sit paused forever with no timeout armed and no way to detect
+      // the stalled load.
+      _resume = ResumeHelper(
+        controller: widget.controller,
+        target: widget.startPosition!,
+        tag: '[Resume]',
+      )..start();
+    }
+    if (_recordsProgress) {
       // Preload the next episode (for series episodes) for the Up Next overlay.
       final id = widget.contentId;
       if (id != null && id.startsWith('episode:')) {

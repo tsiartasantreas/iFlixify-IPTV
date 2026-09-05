@@ -27,6 +27,12 @@ class PlayerController extends ChangeNotifier {
     _videoController = VideoController(_player);
     _positionSub = _player.stream.position.listen((p) {
       _position = p;
+      // Real playback progress: playing flag up AND the position actually
+      // advanced past zero. See [_everPlayed] for why this distinction
+      // matters (media_kit's optimistic playing events).
+      if (_isPlaying && p > Duration.zero) {
+        _everPlayed = true;
+      }
       notifyListeners();
     });
     _durationSub = _player.stream.duration.listen((d) {
@@ -36,10 +42,18 @@ class PlayerController extends ChangeNotifier {
     _playingSub = _player.stream.playing.listen((p) {
       _isPlaying = p;
       if (p) {
-        // Playback started -- cancel the startup timeout and clear any
-        // stale error / buffering state that may have been set by a
-        // non-fatal codec warning before the first frame decoded.
-        _timeoutTimer?.cancel();
+        if (_position > Duration.zero) {
+          _everPlayed = true;
+        }
+        // Clear any stale error / buffering state that may have been set by
+        // a non-fatal codec warning before the first frame decoded.
+        //
+        // NOTE: the startup timeout is deliberately NOT cancelled here.
+        // media_kit emits `playing = true` optimistically as soon as mpv is
+        // un-paused, before a single byte of the stream may have arrived —
+        // cancelling on that event made the 15 s dead-stream timeout
+        // unreachable. The timer now only fires when no real playback
+        // progress has been seen (see [_everPlayed] and [_armStartupTimeout]).
         _error = null;
         _isBuffering = false;
       }
@@ -50,18 +64,45 @@ class PlayerController extends ChangeNotifier {
       notifyListeners();
     });
     _errorSub = _player.stream.error.listen((msg) {
-      // Only treat as a fatal error when the player is NOT playing.
-      // Some codecs (e.g. AVI / DivX) emit non-fatal warnings during
-      // hardware-decode fallback while playback continues fine in the
-      // background.  In that case the error is a benign codec warning
-      // and should not surface to the UI.
+      // Case 1 — player not playing at all (paused / paused-for-resume /
+      // idle): nothing to lose, surface immediately.
       if (!_player.state.playing) {
-        _error = msg;
-        _isBuffering = false;
-        _timeoutTimer?.cancel();
-        notifyListeners();
+        _pendingErrorTimer?.cancel();
+        _pendingError = null;
+        _surfaceError(msg);
+        return;
       }
-      // If the player IS playing, silently ignore the warning.
+
+      // Case 2 — real playback already in progress (`_everPlayed`): some
+      // codecs (e.g. AVI / DivX) emit non-fatal warnings during
+      // hardware-decode fallback while playback continues fine in the
+      // background. These are benign and must not surface to the UI.
+      if (_everPlayed) {
+        // ignore: avoid_print
+        print('[PlayerEngine] non-fatal warning while playing (ignored): '
+            '$msg');
+        return;
+      }
+
+      // Case 3 — load window: media_kit has already flipped its optimistic
+      // `playing = true` flag, but no frame has decoded yet. The error may
+      // be a fatal dead-stream failure OR a benign pre-first-frame decoder
+      // warning. Defer the decision by a short grace window: if real
+      // playback starts, discard the warning; if not, surface it.
+      // ignore: avoid_print
+      print('[PlayerEngine] error during load window — deferring: $msg');
+      _pendingError = msg;
+      _pendingErrorTimer?.cancel();
+      _pendingErrorTimer = Timer(const Duration(seconds: 5), () {
+        if (_everPlayed) {
+          // ignore: avoid_print
+          print('[PlayerEngine] deferred error discarded — playback started '
+              'after all: $_pendingError');
+        } else {
+          _surfaceError(_pendingError ?? msg);
+        }
+        _pendingError = null;
+      });
     });
 
     // -- Track streams (audio / subtitle / video) ----------------------------
@@ -108,8 +149,24 @@ class PlayerController extends ChangeNotifier {
   bool _isPlaying = false;
   bool _isBuffering = false;
 
+  /// True once the engine has shown REAL playback progress: the playing
+  /// flag is up AND the position has actually advanced past zero.
+  ///
+  /// media_kit emits `playing = true` optimistically the moment `open(play:
+  /// true)` / `play()` un-pauses mpv — long before any frame is decoded or
+  /// any byte arrives. That optimistic event must NOT be mistaken for real
+  /// playback: the startup timeout is only considered satisfied (and codec
+  /// warnings are only treated as benign) once [Player.position] has moved.
+  bool _everPlayed = false;
+
   /// Last error message from the player, if any.
   String? _error;
+
+  /// An error that arrived during the load window (media_kit's optimistic
+  /// `playing = true`, no frame decoded yet). Surfaced only if real playback
+  /// does not start within the grace window — see [_errorSub].
+  String? _pendingError;
+  Timer? _pendingErrorTimer;
 
   /// Stored for [retry].
   String? _lastUrl;
@@ -322,6 +379,10 @@ class PlayerController extends ChangeNotifier {
   Future<void> open(String url, {PlayerConfig? config, bool autoPlay = true}) async {
     // Clear any previous error.
     _error = null;
+    _pendingErrorTimer?.cancel();
+    _pendingError = null;
+    // New media load: no real playback progress exists yet.
+    _everPlayed = false;
     _lastUrl = url;
     _lastConfig = config ?? PlayerConfig.defaultConfig;
     _currentConfig = _lastConfig!;
@@ -411,6 +472,12 @@ class PlayerController extends ChangeNotifier {
     _applyAudioDelayProperty();
     _applySubDelayProperty();
 
+    // Reset the real-progress flag again now that open() has settled: the
+    // optimistic `playing = true` event (and a stale position value from the
+    // previous media) can arrive during the await above and must not count
+    // as playback progress for the new stream.
+    _everPlayed = false;
+
     // Start the startup timeout -- if playback never begins, surface an
     // error. When [autoPlay] is false (the resume flow opens the player
     // paused so the player screen can seek first), the timer is NOT started
@@ -427,20 +494,37 @@ class PlayerController extends ChangeNotifier {
   /// Arms the 15-second startup timeout exactly once per [open] call. A no-op
   /// when the timeout is already running. Called immediately for
   /// `autoPlay: true` opens and lazily from [play] for paused opens.
+  ///
+  /// The timer is deliberately NOT cancelled by media_kit's optimistic
+  /// `playing = true` event (see [_playingSub]): it only reports a timeout
+  /// when no real playback progress has been seen ([_everPlayed] is still
+  /// false), so a stream that merely starts slowly is never flagged, while a
+  /// dead/unreachable stream surfaces an error instead of buffering forever.
   void _armStartupTimeout() {
     if (_timeoutArmed) return;
     _timeoutArmed = true;
     _timeoutTimer?.cancel();
     _timeoutTimer = Timer(const Duration(seconds: 15), () {
-      if (!_isPlaying && _error == null) {
+      if (!_everPlayed && _error == null) {
         _error =
             'Stream timed out. The channel may be offline or unreachable.';
         // ignore: avoid_print
-        print('[PlayerController] TIMEOUT — isPlaying=$_isPlaying, '
-            'isBuffering=$_isBuffering, error=$_error');
+        print('[PlayerEngine] TIMEOUT — isPlaying=$_isPlaying, '
+            'isBuffering=$_isBuffering, everPlayed=$_everPlayed, '
+            'error=$_error');
         notifyListeners();
       }
     });
+  }
+
+  /// Records and publishes a fatal playback error.
+  void _surfaceError(String msg) {
+    _error = msg;
+    _isBuffering = false;
+    _timeoutTimer?.cancel();
+    // ignore: avoid_print
+    print('[PlayerEngine] ERROR surfaced: $msg');
+    notifyListeners();
   }
 
   /// Re-open the last stream URL (e.g. after an error).
@@ -641,6 +725,7 @@ class PlayerController extends ChangeNotifier {
   @override
   void dispose() {
     _timeoutTimer?.cancel();
+    _pendingErrorTimer?.cancel();
     _positionSub.cancel();
     _durationSub.cancel();
     _playingSub.cancel();
