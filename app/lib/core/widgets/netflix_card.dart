@@ -52,16 +52,16 @@ class NetflixCard extends StatelessWidget {
       Platform.isLinux ||
       (Platform.isAndroid &&
           MediaQueryData.fromView(
-                      WidgetsBinding.instance.platformDispatcher.views.first)
-                  .size
-                  .shortestSide >
+                WidgetsBinding.instance.platformDispatcher.views.first,
+              ).size.shortestSide >
               600);
 
   @override
   Widget build(BuildContext context) {
     final cardWidth = _isTv ? AppTheme.tvCardWidth : AppTheme.cardWidth;
-    final aspectRatio =
-        _useLandscape ? AppTheme.thumbnailAspectRatio : AppTheme.posterAspectRatio;
+    final aspectRatio = _useLandscape
+        ? AppTheme.thumbnailAspectRatio
+        : AppTheme.posterAspectRatio;
 
     final card = GestureDetector(
       onTap: onTap,
@@ -80,8 +80,9 @@ class NetflixCard extends StatelessWidget {
                 child: Container(
                   decoration: BoxDecoration(
                     color: AppColors.bgSurface,
-                    borderRadius:
-                        BorderRadius.circular(AppTheme.cardBorderRadius),
+                    borderRadius: BorderRadius.circular(
+                      AppTheme.cardBorderRadius,
+                    ),
                   ),
                   clipBehavior: Clip.antiAlias,
                   child: imageUrl != null && imageUrl!.isNotEmpty
@@ -119,10 +120,15 @@ class NetflixCard extends StatelessWidget {
         onFocusChanged: onFocusChanged,
         child: Focus(
           onKeyEvent: (node, event) {
-            if (event is KeyDownEvent &&
-                event.logicalKey == LogicalKeyboardKey.select) {
-              onTap?.call();
-              return KeyEventResult.handled;
+            if (event is KeyDownEvent || event is KeyRepeatEvent) {
+              final key = event.logicalKey;
+              if (key == LogicalKeyboardKey.select ||
+                  key == LogicalKeyboardKey.enter ||
+                  key == LogicalKeyboardKey.space ||
+                  key == LogicalKeyboardKey.gameButtonA) {
+                onTap?.call();
+                return KeyEventResult.handled;
+              }
             }
             return KeyEventResult.ignored;
           },

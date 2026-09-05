@@ -16,6 +16,7 @@ import 'package:share_plus/share_plus.dart';
 import '../../core/data/database.dart';
 import '../../core/data/watch_progress_service.dart';
 import '../../core/player/player_controller.dart';
+import '../../core/player/resume_helper.dart';
 import '../../core/theme/app_colors.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -98,16 +99,17 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
   Timer? _progressTimer;
   bool _wasPlaying = false;
 
-  /// True until the saved [TvPlayerScreen.startPosition] has actually been
-  /// applied to the player. While pending, progress is NOT saved — the
-  /// position would be ~0 and would clobber the very progress we are
-  /// resuming from.
-  bool _resumePending = false;
-  int _resumeAttempts = 0;
-  DateTime? _lastResumeAttempt;
+  /// Shared resume-from-saved-position state machine (see [ResumeHelper]).
+  /// Null when there is nothing to resume. While `isActive`, progress is NOT
+  /// saved — the position would be ~0 and would clobber the very progress we
+  /// are resuming from — and the user cannot un-pause the player.
+  ResumeHelper? _resume;
+
+  /// True while the saved [TvPlayerScreen.startPosition] has not yet been
+  /// applied and verified on the player.
+  bool get _resumePending => _resume?.isActive ?? false;
   bool _completed = false;
   EpisodeUpNext? _upNext;
-  StreamSubscription<Duration>? _durationSub;
 
   /// True when watch progress should be recorded for this session.
   bool get _recordsProgress =>
@@ -163,41 +165,16 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
       widget.controller.addListener(_onPlayerChanged);
       if (widget.startPosition != null &&
           widget.startPosition! > Duration.zero) {
-        _resumePending = true;
-        // The duration may already be known (e.g. a fast-loading local
-        // file that finished opening before this screen subscribed) —
-        // attempt the resume right away instead of waiting for the next
-        // player notification.
-        _tryResume();
-
-        // Listen for duration becoming available (the player may still be
-        // opening/buffering). When duration arrives, seek immediately.
-        _durationSub =
-            widget.controller.player.stream.duration.listen((d) {
-          if (d > Duration.zero && _resumePending && mounted) {
-            // ignore: avoid_print
-            print('[TvPlayerScreen] Duration available (${d.inSeconds}s) — seeking to ${widget.startPosition!.inSeconds}s');
-            widget.controller.seek(widget.startPosition!);
-            // Verify seek took effect after a brief delay.
-            Future.delayed(const Duration(milliseconds: 500), () {
-              if (mounted && _resumePending) {
-                if (widget.controller.position +
-                        const Duration(seconds: 5) >=
-                    widget.startPosition!) {
-                  _resumePending = false;
-                  _durationSub?.cancel();
-                  _durationSub = null;
-                  widget.controller.play();
-                }
-              }
-            });
-          }
-        });
-        // Note: the subscription is NOT cancelled on a fixed timer — slow
-        // streams can take longer than 10 s to report a duration, and
-        // cancelling early would strand the pending resume. It is cancelled
-        // once the resume succeeds (or is abandoned) in [_tryResume], and
-        // always in dispose().
+        // Opened paused (the caller used open(autoPlay: false)); start the
+        // resume state machine. It waits for a trustworthy duration, seeks
+        // once, verifies the seek landed, and only then calls play(). While
+        // it is active, watch-progress saving is suppressed (see
+        // [_saveWatchProgress]) and manual play/pause is gated.
+        _resume = ResumeHelper(
+          controller: widget.controller,
+          target: widget.startPosition!,
+          tag: '[Resume]',
+        )..start();
       }
       // Preload the next episode (for series episodes) for the Up Next overlay.
       final id = widget.contentId;
@@ -227,7 +204,7 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
     _topBarNode.dispose();
     _bottomBarNode.dispose();
     WakelockPlus.disable();
-    _durationSub?.cancel();
+    _resume?.dispose();
     if (_recordsProgress) {
       _progressTimer?.cancel();
       widget.controller.removeListener(_onPlayerChanged);
@@ -284,73 +261,18 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
     if (mounted) Navigator.of(context).pop();
   }
 
-  /// Attempts to seek to [TvPlayerScreen.startPosition] once the media
-  /// duration is known.
-  ///
-  /// Seeks issued while the stream is still opening/buffering can be
-  /// silently dropped by the playback engine, so the seek is retried
-  /// (rate-limited) until playback actually reaches the target position.
-  /// Only then is `_resumePending` cleared and progress saving re-enabled.
-  void _tryResume() {
-    if (!_resumePending) return;
-    final target = widget.startPosition;
-    if (target == null || target <= Duration.zero) {
-      _resumePending = false;
-      return;
-    }
-    final ctrl = widget.controller;
-
-    // Wait until the duration is known before seeking.
-    if (ctrl.duration <= Duration.zero) return;
-
-    // The seek took effect once playback reaches (near) the target.
-    if (ctrl.position + const Duration(seconds: 5) >= target) {
-      _resumePending = false;
-      // Resume verified — the duration listener is no longer needed.
-      _durationSub?.cancel();
-      _durationSub = null;
-      return;
-    }
-
-    // Give up after too many attempts (e.g. an unseekable stream) and
-    // simply play from the start.
-    if (_resumeAttempts >= 30) {
-      _resumePending = false;
-      // Resume abandoned — the duration listener is no longer needed.
-      _durationSub?.cancel();
-      _durationSub = null;
-      return;
-    }
-
-    // Rate-limit retries so we don't hammer the player on every position
-    // tick while the stream is still buffering.
-    final now = DateTime.now();
-    if (_lastResumeAttempt != null &&
-        now.difference(_lastResumeAttempt!) <
-            const Duration(milliseconds: 500)) {
-      return;
-    }
-    _resumeAttempts++;
-    _lastResumeAttempt = now;
-
-    // ignore: avoid_print
-    print('[TvPlayerScreen] _tryResume attempt $_resumeAttempts → seeking to ${target.inSeconds}s (current: ${ctrl.position.inSeconds}s, duration: ${ctrl.duration.inSeconds}s)');
-    ctrl.seek(target);
-    // Resume playback after seeking (the player was paused during resume).
-    if (!ctrl.isPlaying) {
-      ctrl.play();
-    }
-  }
-
-  /// Reacts to player state changes: resume seek, pause save, completion.
+  /// Reacts to player state changes: pause save, completion.
   void _onPlayerChanged() {
     final ctrl = widget.controller;
 
-    // Retry / verify the resume seek on every player notification.
-    _tryResume();
+    // The resume state machine ([ResumeHelper]) polls the controller on its
+    // own timer; nothing resume-related needs to happen on notifications.
 
     // Treat >= 95% watched as completed: drop from Continue Watching.
+    // Skipped while the resume is pending — the player is parked at the
+    // resume point and progress must not be cleared mid-resume.
     if (!_completed &&
+        !_resumePending &&
         ctrl.duration > Duration.zero &&
         ctrl.position.inMilliseconds >=
             ctrl.duration.inMilliseconds * 0.95) {
@@ -527,8 +449,9 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
       return;
     }
 
-    // Quick press: toggle play/pause (original behavior).
-    widget.controller.togglePlay();
+    // Quick press: toggle play/pause (original behavior) — but never
+    // un-pause while the resume seek is still pending.
+    if (!_resumePending) widget.controller.togglePlay();
     _showControls();
   }
 

@@ -16,11 +16,7 @@ import '../theme/app_theme.dart';
 /// - Auto-crossfade between featured items every 8 seconds.
 /// - Mobile: ~60% viewport height; TV: ~70%.
 class NetflixHero extends StatefulWidget {
-  const NetflixHero({
-    super.key,
-    required this.items,
-    this.isTv = false,
-  });
+  const NetflixHero({super.key, required this.items, this.isTv = false});
 
   /// List of featured items to rotate through.
   final List<NetflixHeroItem> items;
@@ -41,9 +37,8 @@ class _NetflixHeroState extends State<NetflixHero> {
       Platform.isLinux ||
       (Platform.isAndroid &&
           MediaQueryData.fromView(
-                      WidgetsBinding.instance.platformDispatcher.views.first)
-                  .size
-                  .shortestSide >
+                WidgetsBinding.instance.platformDispatcher.views.first,
+              ).size.shortestSide >
               960);
 
   @override
@@ -60,16 +55,13 @@ class _NetflixHeroState extends State<NetflixHero> {
 
   void _startAutoRotate() {
     _autoRotateTimer?.cancel();
-    _autoRotateTimer = Timer.periodic(
-      const Duration(seconds: 8),
-      (_) {
-        if (mounted && widget.items.length > 1) {
-          setState(() {
-            _currentIndex = (_currentIndex + 1) % widget.items.length;
-          });
-        }
-      },
-    );
+    _autoRotateTimer = Timer.periodic(const Duration(seconds: 8), (_) {
+      if (mounted && widget.items.length > 1) {
+        setState(() {
+          _currentIndex = (_currentIndex + 1) % widget.items.length;
+        });
+      }
+    });
   }
 
   @override
@@ -90,10 +82,7 @@ class _NetflixHeroState extends State<NetflixHero> {
           AnimatedSwitcher(
             duration: AppTheme.heroCrossfadeDuration,
             transitionBuilder: (child, animation) {
-              return FadeTransition(
-                opacity: animation,
-                child: child,
-              );
+              return FadeTransition(opacity: animation, child: child);
             },
             child: KeyedSubtree(
               key: ValueKey(_currentIndex),
@@ -121,10 +110,7 @@ class _NetflixHeroState extends State<NetflixHero> {
                 gradient: LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.transparent,
-                    AppColors.bgBase,
-                  ],
+                  colors: [Colors.transparent, AppColors.bgBase],
                 ),
               ),
             ),
@@ -141,10 +127,7 @@ class _NetflixHeroState extends State<NetflixHero> {
                 gradient: LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
-                  colors: [
-                    AppColors.bgBase,
-                    Colors.transparent,
-                  ],
+                  colors: [AppColors.bgBase, Colors.transparent],
                 ),
               ),
             ),
@@ -242,19 +225,21 @@ class _NetflixHeroState extends State<NetflixHero> {
       height: buttonHeight,
       child: Focus(
         onKeyEvent: (node, event) {
-          if (event is KeyDownEvent &&
-              event.logicalKey == LogicalKeyboardKey.select) {
-            widget.items[_currentIndex].onPlay?.call();
-            return KeyEventResult.handled;
+          if (event is KeyDownEvent || event is KeyRepeatEvent) {
+            final key = event.logicalKey;
+            if (key == LogicalKeyboardKey.select ||
+                key == LogicalKeyboardKey.enter ||
+                key == LogicalKeyboardKey.space ||
+                key == LogicalKeyboardKey.gameButtonA) {
+              widget.items[_currentIndex].onPlay?.call();
+              return KeyEventResult.handled;
+            }
           }
           return KeyEventResult.ignored;
         },
         child: ElevatedButton.icon(
           onPressed: () => widget.items[_currentIndex].onPlay?.call(),
-          icon: Icon(
-            Icons.play_arrow,
-            size: _isTv ? 32 : 24,
-          ),
+          icon: Icon(Icons.play_arrow, size: _isTv ? 32 : 24),
           label: Text(
             'Play',
             style: TextStyle(
@@ -265,9 +250,7 @@ class _NetflixHeroState extends State<NetflixHero> {
           style: ElevatedButton.styleFrom(
             backgroundColor: AppColors.textPrimary,
             foregroundColor: AppColors.bgBase,
-            padding: EdgeInsets.symmetric(
-              horizontal: _isTv ? 32 : 24,
-            ),
+            padding: EdgeInsets.symmetric(horizontal: _isTv ? 32 : 24),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(AppTheme.cardBorderRadius),
             ),
@@ -284,19 +267,21 @@ class _NetflixHeroState extends State<NetflixHero> {
       height: buttonHeight,
       child: Focus(
         onKeyEvent: (node, event) {
-          if (event is KeyDownEvent &&
-              event.logicalKey == LogicalKeyboardKey.select) {
-            widget.items[_currentIndex].onMyList?.call();
-            return KeyEventResult.handled;
+          if (event is KeyDownEvent || event is KeyRepeatEvent) {
+            final key = event.logicalKey;
+            if (key == LogicalKeyboardKey.select ||
+                key == LogicalKeyboardKey.enter ||
+                key == LogicalKeyboardKey.space ||
+                key == LogicalKeyboardKey.gameButtonA) {
+              widget.items[_currentIndex].onMyList?.call();
+              return KeyEventResult.handled;
+            }
           }
           return KeyEventResult.ignored;
         },
         child: ElevatedButton.icon(
           onPressed: () => widget.items[_currentIndex].onMyList?.call(),
-          icon: Icon(
-            Icons.add,
-            size: _isTv ? 28 : 20,
-          ),
+          icon: Icon(Icons.add, size: _isTv ? 28 : 20),
           label: Text(
             'My List',
             style: TextStyle(
@@ -307,9 +292,7 @@ class _NetflixHeroState extends State<NetflixHero> {
           style: ElevatedButton.styleFrom(
             backgroundColor: AppColors.bgSurface.withValues(alpha: 0.8),
             foregroundColor: AppColors.textPrimary,
-            padding: EdgeInsets.symmetric(
-              horizontal: _isTv ? 32 : 24,
-            ),
+            padding: EdgeInsets.symmetric(horizontal: _isTv ? 32 : 24),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(AppTheme.cardBorderRadius),
             ),
@@ -327,10 +310,7 @@ class _NetflixHeroState extends State<NetflixHero> {
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [
-            AppColors.bgElevated,
-            AppColors.bgSurface,
-          ],
+          colors: [AppColors.bgElevated, AppColors.bgSurface],
         ),
       ),
       child: Center(

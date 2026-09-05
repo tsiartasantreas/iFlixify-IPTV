@@ -1,12 +1,13 @@
-
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/config/tv_mode.dart';
 import '../../core/data/database.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/widgets/animated_focus.dart';
 import '../detail/detail_screen.dart';
 
 /// Search screen that searches across content (channels, VOD, series, radio).
@@ -17,10 +18,7 @@ import '../detail/detail_screen.dart';
 /// Mobile: search bar at top with results grid below.
 /// TV: D-pad navigable search bar + results grid.
 class SearchScreen extends StatefulWidget {
-  const SearchScreen({
-    super.key,
-    this.contentType = 'all',
-  });
+  const SearchScreen({super.key, this.contentType = 'all'});
 
   /// Limits search to a specific content type.
   /// One of: `'live'`, `'vod'`, `'series'`, `'radio'`, `'all'`.
@@ -83,16 +81,19 @@ class _SearchScreenState extends State<SearchScreen> {
       final channels = await _db.select(_db.channels).get();
       for (final ch in channels) {
         if (ch.name.toLowerCase().contains(q) ||
-            (ch.groupTitle != null && ch.groupTitle!.toLowerCase().contains(q))) {
-          results.add(_SearchResult(
-            id: ch.id,
-            title: ch.name,
-            imageUrl: ch.logo,
-            url: ch.url,
-            groupTitle: ch.groupTitle,
-            contentType: 'live',
-            typeLabel: 'Live TV',
-          ));
+            (ch.groupTitle != null &&
+                ch.groupTitle!.toLowerCase().contains(q))) {
+          results.add(
+            _SearchResult(
+              id: ch.id,
+              title: ch.name,
+              imageUrl: ch.logo,
+              url: ch.url,
+              groupTitle: ch.groupTitle,
+              contentType: 'live',
+              typeLabel: 'Live TV',
+            ),
+          );
         }
       }
     }
@@ -104,15 +105,17 @@ class _SearchScreenState extends State<SearchScreen> {
         if (vod.title.toLowerCase().contains(q) ||
             (vod.groupTitle != null &&
                 vod.groupTitle!.toLowerCase().contains(q))) {
-          results.add(_SearchResult(
-            id: vod.id,
-            title: vod.title,
-            imageUrl: vod.poster,
-            url: vod.url,
-            groupTitle: vod.groupTitle,
-            contentType: 'vod',
-            typeLabel: 'Movie',
-          ));
+          results.add(
+            _SearchResult(
+              id: vod.id,
+              title: vod.title,
+              imageUrl: vod.poster,
+              url: vod.url,
+              groupTitle: vod.groupTitle,
+              contentType: 'vod',
+              typeLabel: 'Movie',
+            ),
+          );
         }
       }
     }
@@ -122,15 +125,17 @@ class _SearchScreenState extends State<SearchScreen> {
       final series = await _db.select(_db.tvSeries).get();
       for (final s in series) {
         if (s.title.toLowerCase().contains(q)) {
-          results.add(_SearchResult(
-            id: s.id,
-            title: s.title,
-            imageUrl: s.poster,
-            url: '',
-            groupTitle: null,
-            contentType: 'series',
-            typeLabel: 'Series',
-          ));
+          results.add(
+            _SearchResult(
+              id: s.id,
+              title: s.title,
+              imageUrl: s.poster,
+              url: '',
+              groupTitle: null,
+              contentType: 'series',
+              typeLabel: 'Series',
+            ),
+          );
         }
       }
     }
@@ -140,15 +145,17 @@ class _SearchScreenState extends State<SearchScreen> {
       final stations = await _db.select(_db.radioStations).get();
       for (final r in stations) {
         if (r.name.toLowerCase().contains(q)) {
-          results.add(_SearchResult(
-            id: r.id,
-            title: r.name,
-            imageUrl: r.logo,
-            url: r.url,
-            groupTitle: null,
-            contentType: 'radio',
-            typeLabel: 'Radio',
-          ));
+          results.add(
+            _SearchResult(
+              id: r.id,
+              title: r.name,
+              imageUrl: r.logo,
+              url: r.url,
+              groupTitle: null,
+              contentType: 'radio',
+              typeLabel: 'Radio',
+            ),
+          );
         }
       }
     }
@@ -218,10 +225,10 @@ class _SearchScreenState extends State<SearchScreen> {
                     ),
                   )
                 : !_hasSearched
-                    ? _buildEmptyState()
-                    : _results.isEmpty
-                        ? _buildNoResults()
-                        : _buildResultsGrid(),
+                ? _buildEmptyState()
+                : _results.isEmpty
+                ? _buildNoResults()
+                : _buildResultsGrid(),
           ),
         ],
       ),
@@ -254,10 +261,16 @@ class _SearchScreenState extends State<SearchScreen> {
           decoration: InputDecoration(
             hintText: _hintForContentType(),
             hintStyle: const TextStyle(color: AppColors.textSecondary),
-            prefixIcon: const Icon(Icons.search, color: AppColors.textSecondary),
+            prefixIcon: const Icon(
+              Icons.search,
+              color: AppColors.textSecondary,
+            ),
             suffixIcon: _searchController.text.isNotEmpty
                 ? IconButton(
-                    icon: const Icon(Icons.clear, color: AppColors.textSecondary),
+                    icon: const Icon(
+                      Icons.clear,
+                      color: AppColors.textSecondary,
+                    ),
                     onPressed: () {
                       _searchController.clear();
                       setState(() {
@@ -270,18 +283,24 @@ class _SearchScreenState extends State<SearchScreen> {
             filled: true,
             fillColor: AppColors.bgSurface,
             border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(AppTheme.cardBorderRadius + 4),
+              borderRadius: BorderRadius.circular(
+                AppTheme.cardBorderRadius + 4,
+              ),
               borderSide: BorderSide.none,
             ),
             focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(AppTheme.cardBorderRadius + 4),
+              borderRadius: BorderRadius.circular(
+                AppTheme.cardBorderRadius + 4,
+              ),
               borderSide: const BorderSide(
                 color: AppColors.accentPrimary,
                 width: 2,
               ),
             ),
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 14,
+            ),
           ),
           onChanged: _onSearchChanged,
         ),
@@ -388,12 +407,17 @@ class _SearchScreenState extends State<SearchScreen> {
   }
 
   Widget _buildResultCard(_SearchResult item) {
-    return Focus(
+    final card = Focus(
       onKeyEvent: (node, event) {
-        if (event is KeyDownEvent &&
-            event.logicalKey == LogicalKeyboardKey.select) {
-          _navigateToDetail(item);
-          return KeyEventResult.handled;
+        if (event is KeyDownEvent || event is KeyRepeatEvent) {
+          final key = event.logicalKey;
+          if (key == LogicalKeyboardKey.select ||
+              key == LogicalKeyboardKey.enter ||
+              key == LogicalKeyboardKey.space ||
+              key == LogicalKeyboardKey.gameButtonA) {
+            _navigateToDetail(item);
+            return KeyEventResult.handled;
+          }
         }
         return KeyEventResult.ignored;
       },
@@ -407,8 +431,9 @@ class _SearchScreenState extends State<SearchScreen> {
               child: Container(
                 decoration: BoxDecoration(
                   color: AppColors.bgSurface,
-                  borderRadius:
-                      BorderRadius.circular(AppTheme.cardBorderRadius),
+                  borderRadius: BorderRadius.circular(
+                    AppTheme.cardBorderRadius,
+                  ),
                 ),
                 clipBehavior: Clip.antiAlias,
                 child: item.imageUrl != null && item.imageUrl!.isNotEmpty
@@ -449,6 +474,11 @@ class _SearchScreenState extends State<SearchScreen> {
         ),
       ),
     );
+
+    // TV parity: visible focus ring on the focused result card (touch keeps
+    // working unchanged on non-TV layouts).
+    if (!TvModeScope.of(context)) return card;
+    return AnimatedFocus(isTv: true, child: card);
   }
 
   Widget _buildPlaceholder() {

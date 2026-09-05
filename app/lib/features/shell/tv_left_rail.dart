@@ -276,56 +276,64 @@ class _RailItemWidgetState extends State<_RailItemWidget> {
     // keeps its own accent tint + bold label. They are independent.
     final highlight = _focused;
 
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
-      curve: Curves.easeOut,
-      padding: EdgeInsets.symmetric(
-        horizontal: widget.expanded ? 16 : 0,
-        vertical: 12,
-      ),
-      decoration: BoxDecoration(
-        color: _focused
-            ? AppColors.bgSurface.withValues(alpha: 0.9)
-            : widget.isSelected
-                ? AppColors.accentPrimary.withValues(alpha: 0.15)
-                : Colors.transparent,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Focus(
-        focusNode: widget.focusNode,
-        autofocus: widget.autofocus,
-        onFocusChange: (focused) {
-          setState(() => _focused = focused);
-          widget.onFocusChanged(focused);
-        },
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              widget.item.icon,
-              color: highlight || widget.isSelected
-                  ? AppColors.accentPrimary
-                  : AppColors.textSecondary,
-              size: 24,
-            ),
-            if (widget.expanded) ...[
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  widget.item.label,
-                  style: TextStyle(
-                    color: highlight || widget.isSelected
-                        ? AppColors.textPrimary
-                        : AppColors.textSecondary,
-                    fontSize: 14,
-                    fontWeight:
-                        widget.isSelected ? FontWeight.w600 : FontWeight.normal,
-                    overflow: TextOverflow.ellipsis,
+    // Touch parity: the whole item is tappable with the SAME action as D-pad
+    // activation. HitTestBehavior.opaque makes the padding area tappable too,
+    // so a tap anywhere on the rail row (icon or label) selects the tab.
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: widget.onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOut,
+        padding: EdgeInsets.symmetric(
+          horizontal: widget.expanded ? 16 : 0,
+          vertical: 12,
+        ),
+        decoration: BoxDecoration(
+          color: _focused
+              ? AppColors.bgSurface.withValues(alpha: 0.9)
+              : widget.isSelected
+              ? AppColors.accentPrimary.withValues(alpha: 0.15)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Focus(
+          focusNode: widget.focusNode,
+          autofocus: widget.autofocus,
+          onFocusChange: (focused) {
+            setState(() => _focused = focused);
+            widget.onFocusChanged(focused);
+          },
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                widget.item.icon,
+                color: highlight || widget.isSelected
+                    ? AppColors.accentPrimary
+                    : AppColors.textSecondary,
+                size: 24,
+              ),
+              if (widget.expanded) ...[
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    widget.item.label,
+                    style: TextStyle(
+                      color: highlight || widget.isSelected
+                          ? AppColors.textPrimary
+                          : AppColors.textSecondary,
+                      fontSize: 14,
+                      fontWeight: widget.isSelected
+                          ? FontWeight.w600
+                          : FontWeight.normal,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                 ),
-              ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );

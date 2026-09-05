@@ -2,14 +2,17 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../../core/config/tv_mode.dart';
 import '../../core/data/database.dart';
 import '../../core/data/offline_download_service.dart';
 import '../../core/data/watch_progress_service.dart';
 import '../../core/player/player_controller.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/widgets/animated_focus.dart';
 import '../player/player_screen.dart';
 import '../player/tv_player_screen.dart';
 
@@ -52,14 +55,10 @@ class _OfflineScreenState extends State<OfflineScreen> {
   /// the tab actually changes (not on the initial build).
   int _lastSeenChangeCount = 0;
 
-  bool get _isTv =>
-      Platform.isLinux ||
-      (Platform.isAndroid &&
-          MediaQueryData.fromView(
-                      WidgetsBinding.instance.platformDispatcher.views.first)
-                  .size
-                  .shortestSide >
-              960);
+  // TV mode follows the shared single source of truth (the user's "TV Mode"
+  // toggle), not a device-size heuristic — TV focus visuals and D-pad support
+  // must apply wherever the user enabled TV mode.
+  bool get _isTv => TvMode.instance.isEnabled;
 
   @override
   void initState() {
@@ -79,16 +78,20 @@ class _OfflineScreenState extends State<OfflineScreen> {
       if (!mounted) return;
 
       // Check if any download just completed -- refresh the DB list.
-      final hasNewCompleted = progressMap.values.any((p) =>
-          p.state == DownloadState.completed &&
-          (_activeDownloads[p.contentId]?.state != DownloadState.completed));
+      final hasNewCompleted = progressMap.values.any(
+        (p) =>
+            p.state == DownloadState.completed &&
+            (_activeDownloads[p.contentId]?.state != DownloadState.completed),
+      );
 
       setState(() {
         _activeDownloads = progressMap;
       });
 
       if (hasNewCompleted) {
-        debugPrint('[OfflineScreen] new download completed, refreshing DB list');
+        debugPrint(
+          '[OfflineScreen] new download completed, refreshing DB list',
+        );
         _loadItems();
       }
     });
@@ -108,7 +111,9 @@ class _OfflineScreenState extends State<OfflineScreen> {
     debugPrint('[OfflineScreen] _loadItems: querying downloaded items...');
     try {
       final items = await _downloadService.getDownloadedItems();
-      debugPrint('[OfflineScreen] _loadItems: got ${items.length} items from DB');
+      debugPrint(
+        '[OfflineScreen] _loadItems: got ${items.length} items from DB',
+      );
       if (mounted) {
         setState(() {
           _items = items;
@@ -212,10 +217,7 @@ class _OfflineScreenState extends State<OfflineScreen> {
             children: [
               Icon(Icons.play_arrow, color: AppColors.accentPrimary, size: 20),
               SizedBox(width: 12),
-              Text(
-                'Play',
-                style: TextStyle(color: AppColors.textPrimary),
-              ),
+              Text('Play', style: TextStyle(color: AppColors.textPrimary)),
             ],
           ),
         ),
@@ -238,10 +240,7 @@ class _OfflineScreenState extends State<OfflineScreen> {
             children: [
               Icon(Icons.share, color: AppColors.textSecondary, size: 20),
               SizedBox(width: 12),
-              Text(
-                'Share',
-                style: TextStyle(color: AppColors.textPrimary),
-              ),
+              Text('Share', style: TextStyle(color: AppColors.textPrimary)),
             ],
           ),
         ),
@@ -252,10 +251,7 @@ class _OfflineScreenState extends State<OfflineScreen> {
             children: [
               Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
               SizedBox(width: 12),
-              Text(
-                'Delete',
-                style: TextStyle(color: Colors.redAccent),
-              ),
+              Text('Delete', style: TextStyle(color: Colors.redAccent)),
             ],
           ),
         ),
@@ -343,10 +339,7 @@ class _OfflineScreenState extends State<OfflineScreen> {
         return;
       }
 
-      await Share.shareXFiles(
-        [XFile(item.filePath)],
-        text: item.title,
-      );
+      await Share.shareXFiles([XFile(item.filePath)], text: item.title);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -412,9 +405,11 @@ class _OfflineScreenState extends State<OfflineScreen> {
   /// completed/failed/cancelled.
   List<DownloadProgress> get _inProgressDownloads {
     return _activeDownloads.values
-        .where((p) =>
-            p.state == DownloadState.queued ||
-            p.state == DownloadState.downloading)
+        .where(
+          (p) =>
+              p.state == DownloadState.queued ||
+              p.state == DownloadState.downloading,
+        )
         .toList();
   }
 
@@ -436,18 +431,16 @@ class _OfflineScreenState extends State<OfflineScreen> {
       ),
       body: _isLoading
           ? const Center(
-              child: CircularProgressIndicator(
-                color: AppColors.accentPrimary,
-              ),
+              child: CircularProgressIndicator(color: AppColors.accentPrimary),
             )
           : _items.isEmpty && _inProgressDownloads.isEmpty
-              ? _buildEmptyState()
-              : RefreshIndicator(
-                  color: AppColors.accentPrimary,
-                  backgroundColor: AppColors.bgElevated,
-                  onRefresh: _onRefresh,
-                  child: _buildContent(),
-                ),
+          ? _buildEmptyState()
+          : RefreshIndicator(
+              color: AppColors.accentPrimary,
+              backgroundColor: AppColors.bgElevated,
+              onRefresh: _onRefresh,
+              child: _buildContent(),
+            ),
     );
   }
 
@@ -476,18 +469,17 @@ class _OfflineScreenState extends State<OfflineScreen> {
             const Text(
               'Download movies and series to watch offline',
               textAlign: TextAlign.center,
-              style: TextStyle(
-                color: AppColors.textSecondary,
-                fontSize: 14,
-              ),
+              style: TextStyle(color: AppColors.textSecondary, fontSize: 14),
             ),
             const SizedBox(height: 32),
             SizedBox(
               height: 48,
               child: ElevatedButton.icon(
-                onPressed: widget.onExploreContent ??
-                    () => Navigator.of(context)
-                        .popUntil((route) => route.isFirst),
+                onPressed:
+                    widget.onExploreContent ??
+                    () => Navigator.of(
+                      context,
+                    ).popUntil((route) => route.isFirst),
                 icon: const Icon(Icons.explore),
                 label: const Text('Explore Content'),
                 style: ElevatedButton.styleFrom(
@@ -542,8 +534,12 @@ class _OfflineScreenState extends State<OfflineScreen> {
           SliverToBoxAdapter(
             child: Container(
               width: double.infinity,
-              padding:
-                  const EdgeInsets.only(left: 16, right: 16, top: 12, bottom: 4),
+              padding: const EdgeInsets.only(
+                left: 16,
+                right: 16,
+                top: 12,
+                bottom: 4,
+              ),
               child: Text(
                 'Downloading (${active.length})',
                 style: const TextStyle(
@@ -609,7 +605,9 @@ class _OfflineScreenState extends State<OfflineScreen> {
           alignment: Alignment.center,
           children: [
             CircularProgressIndicator(
-              value: isQueued ? null : (progress.progress > 0 ? progress.progress : null),
+              value: isQueued
+                  ? null
+                  : (progress.progress > 0 ? progress.progress : null),
               strokeWidth: 3,
               color: AppColors.accentPrimary,
               backgroundColor: AppColors.bgSurface,
@@ -634,19 +632,13 @@ class _OfflineScreenState extends State<OfflineScreen> {
       ),
       title: Text(
         progress.title,
-        style: const TextStyle(
-          color: AppColors.textPrimary,
-          fontSize: 14,
-        ),
+        style: const TextStyle(color: AppColors.textPrimary, fontSize: 14),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
       subtitle: Text(
         isQueued ? 'Queued...' : 'Downloading...',
-        style: const TextStyle(
-          color: AppColors.textSecondary,
-          fontSize: 12,
-        ),
+        style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
       ),
       trailing: IconButton(
         icon: const Icon(Icons.close, color: AppColors.textSecondary, size: 20),
@@ -656,7 +648,7 @@ class _OfflineScreenState extends State<OfflineScreen> {
   }
 
   Widget _buildDownloadCard(DownloadedItem item) {
-    return GestureDetector(
+    final card = GestureDetector(
       onTap: () => _playItem(item),
       onLongPressStart: (details) =>
           _showItemContextMenu(item, details.globalPosition),
@@ -757,6 +749,30 @@ class _OfflineScreenState extends State<OfflineScreen> {
         ],
       ),
     );
+
+    // TV parity: the card gets a visible focus ring and D-pad activation
+    // (select/enter/space/A) mirroring the touch tap-to-play action.
+    if (!_isTv) return card;
+    return AnimatedFocus(
+      isTv: true,
+      child: Focus(
+        autofocus: false,
+        onKeyEvent: (node, event) {
+          if (event is KeyDownEvent || event is KeyRepeatEvent) {
+            final key = event.logicalKey;
+            if (key == LogicalKeyboardKey.select ||
+                key == LogicalKeyboardKey.enter ||
+                key == LogicalKeyboardKey.space ||
+                key == LogicalKeyboardKey.gameButtonA) {
+              _playItem(item);
+              return KeyEventResult.handled;
+            }
+          }
+          return KeyEventResult.ignored;
+        },
+        child: card,
+      ),
+    );
   }
 
   Widget _buildPlaceholderIcon(String contentType) {
@@ -775,13 +791,7 @@ class _OfflineScreenState extends State<OfflineScreen> {
         icon = Icons.play_circle_outline;
     }
 
-    return Center(
-      child: Icon(
-        icon,
-        color: AppColors.bgElevated,
-        size: 48,
-      ),
-    );
+    return Center(child: Icon(icon, color: AppColors.bgElevated, size: 48));
   }
 
   @override

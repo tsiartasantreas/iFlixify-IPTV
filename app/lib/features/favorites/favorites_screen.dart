@@ -1,9 +1,8 @@
-import 'dart:io';
-
 import 'package:drift/drift.dart' as drift;
 import 'package:flutter/material.dart';
 
 import '../../core/auth/profile_manager.dart';
+import '../../core/config/tv_mode.dart';
 import '../../core/data/database.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_theme.dart';
@@ -46,14 +45,11 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
   /// the tab actually changes (not on the initial build).
   int _lastSeenChangeCount = 0;
 
-  bool get _isTv =>
-      Platform.isLinux ||
-      (Platform.isAndroid &&
-          MediaQueryData.fromView(
-                      WidgetsBinding.instance.platformDispatcher.views.first)
-                  .size
-                  .shortestSide >
-              960);
+  // TV mode follows the shared single source of truth (the user's "TV Mode"
+  // toggle), not a device-size heuristic — otherwise TV-layout focus and
+  // D-pad support would be missing on exactly the devices the user marked
+  // as TV.
+  bool get _isTv => TvMode.instance.isEnabled;
 
   @override
   void initState() {
@@ -97,9 +93,9 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
       return;
     }
 
-    final favorites = await (_db!.select(_db!.favorites)
-          ..orderBy([(t) => drift.OrderingTerm.desc(t.addedAt)]))
-        .get();
+    final favorites = await (_db!.select(
+      _db!.favorites,
+    )..orderBy([(t) => drift.OrderingTerm.desc(t.addedAt)])).get();
 
     final items = <_FavoriteItem>[];
     for (final fav in favorites) {
@@ -152,9 +148,9 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
 
     switch (type) {
       case 'channel':
-        final channels = await (_db!.select(_db!.channels)
-              ..where((t) => t.id.equals(id)))
-            .get();
+        final channels = await (_db!.select(
+          _db!.channels,
+        )..where((t) => t.id.equals(id))).get();
         if (channels.isEmpty) return null;
         final ch = channels.first;
         return _FavoriteItem(
@@ -169,9 +165,9 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
         );
 
       case 'vod':
-        final vods = await (_db!.select(_db!.vodItems)
-              ..where((t) => t.id.equals(id)))
-            .get();
+        final vods = await (_db!.select(
+          _db!.vodItems,
+        )..where((t) => t.id.equals(id))).get();
         if (vods.isEmpty) return null;
         final vod = vods.first;
         return _FavoriteItem(
@@ -186,9 +182,9 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
         );
 
       case 'series':
-        final seriesList = await (_db!.select(_db!.tvSeries)
-              ..where((t) => t.id.equals(id)))
-            .get();
+        final seriesList = await (_db!.select(
+          _db!.tvSeries,
+        )..where((t) => t.id.equals(id))).get();
         if (seriesList.isEmpty) return null;
         final series = seriesList.first;
         return _FavoriteItem(
@@ -245,9 +241,9 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
 
     if (confirmed == true) {
       if (_db != null) {
-        await (_db!.delete(_db!.favorites)
-              ..where((t) => t.contentId.equals(item.contentId)))
-            .go();
+        await (_db!.delete(
+          _db!.favorites,
+        )..where((t) => t.contentId.equals(item.contentId))).go();
       }
 
       if (mounted) {
@@ -335,10 +331,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
           const Text(
             'Browse and tap the + icon to add\nfavourites to your list.',
             textAlign: TextAlign.center,
-            style: TextStyle(
-              color: AppColors.textSecondary,
-              fontSize: 14,
-            ),
+            style: TextStyle(color: AppColors.textSecondary, fontSize: 14),
           ),
         ],
       ),
@@ -354,9 +347,10 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
       builder: (context, constraints) {
         // Determine grid columns based on available width.
         final cardWidth = _isTv ? AppTheme.tvCardWidth : AppTheme.cardWidth;
-        final columns = (constraints.maxWidth / (cardWidth + AppTheme.cardSpacing))
-            .floor()
-            .clamp(2, 8);
+        final columns =
+            (constraints.maxWidth / (cardWidth + AppTheme.cardSpacing))
+                .floor()
+                .clamp(2, 8);
 
         return CustomScrollView(
           slivers: [
@@ -404,13 +398,10 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
                   crossAxisSpacing: AppTheme.cardSpacing,
                   mainAxisSpacing: AppTheme.rowSpacing,
                 ),
-                delegate: SliverChildBuilderDelegate(
-                  (context, index) {
-                    final item = _items[index];
-                    return _buildFavoriteCard(item);
-                  },
-                  childCount: _items.length,
-                ),
+                delegate: SliverChildBuilderDelegate((context, index) {
+                  final item = _items[index];
+                  return _buildFavoriteCard(item);
+                }, childCount: _items.length),
               ),
             ),
 
@@ -429,6 +420,10 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
   Widget _buildFavoriteCard(_FavoriteItem item) {
     return NetflixFocus(
       isTv: _isTv,
+      // Touch parity: D-pad activation on the wrapper focus node mirrors the
+      // tap-to-open action of the card (the inner NetflixCard focus node only
+      // catches keys when it holds focus directly).
+      onActivate: () => _navigateToDetail(item),
       child: GestureDetector(
         onTap: () => _navigateToDetail(item),
         onLongPress: () => _removeFavorite(item),

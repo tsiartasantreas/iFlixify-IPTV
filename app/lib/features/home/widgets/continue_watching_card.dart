@@ -36,9 +36,8 @@ class ContinueWatchingCard extends StatelessWidget {
       Platform.isLinux ||
       (Platform.isAndroid &&
           MediaQueryData.fromView(
-                      WidgetsBinding.instance.platformDispatcher.views.first)
-                  .size
-                  .shortestSide >
+                WidgetsBinding.instance.platformDispatcher.views.first,
+              ).size.shortestSide >
               600);
 
   @override
@@ -123,10 +122,15 @@ class ContinueWatchingCard extends StatelessWidget {
         isTv: true,
         child: Focus(
           onKeyEvent: (node, event) {
-            if (event is KeyDownEvent &&
-                event.logicalKey == LogicalKeyboardKey.select) {
-              onTap?.call();
-              return KeyEventResult.handled;
+            if (event is KeyDownEvent || event is KeyRepeatEvent) {
+              final key = event.logicalKey;
+              if (key == LogicalKeyboardKey.select ||
+                  key == LogicalKeyboardKey.enter ||
+                  key == LogicalKeyboardKey.space ||
+                  key == LogicalKeyboardKey.gameButtonA) {
+                onTap?.call();
+                return KeyEventResult.handled;
+              }
             }
             return KeyEventResult.ignored;
           },
@@ -140,11 +144,7 @@ class ContinueWatchingCard extends StatelessWidget {
 
   Widget _buildPlaceholder() {
     return const Center(
-      child: Icon(
-        Icons.movie,
-        color: AppColors.bgSurface,
-        size: 40,
-      ),
+      child: Icon(Icons.movie, color: AppColors.bgSurface, size: 40),
     );
   }
 }

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
+import '../config/tv_mode.dart';
 import '../data/favorites_service.dart';
 import '../theme/app_colors.dart';
 
@@ -56,6 +58,9 @@ class _FavoriteButtonState extends State<FavoriteButton> {
   bool _isFavorite = false;
   bool _isLoading = true;
 
+  /// Whether the TV (D-pad) focus ring is shown.
+  bool _tvFocused = false;
+
   @override
   void initState() {
     super.initState();
@@ -102,12 +107,49 @@ class _FavoriteButtonState extends State<FavoriteButton> {
       );
     }
 
-    return GestureDetector(
+    final heart = GestureDetector(
       onTap: _toggle,
       child: Icon(
         _isFavorite ? Icons.favorite : Icons.favorite_border,
         color: _isFavorite ? Colors.red : AppColors.textSecondary,
         size: widget.size,
+      ),
+    );
+
+    // TV touch parity: the heart is focusable and activates via
+    // Select / Enter / Space / Game Button A, with a visible focus ring.
+    // Touch (onTap) keeps working exactly as before.
+    if (!TvModeScope.of(context)) return heart;
+    return Focus(
+      onFocusChange: (focused) {
+        if (mounted) setState(() => _tvFocused = focused);
+      },
+      onKeyEvent: (node, event) {
+        if (event is KeyDownEvent || event is KeyRepeatEvent) {
+          final key = event.logicalKey;
+          if (key == LogicalKeyboardKey.select ||
+              key == LogicalKeyboardKey.enter ||
+              key == LogicalKeyboardKey.space ||
+              key == LogicalKeyboardKey.gameButtonA) {
+            _toggle();
+            return KeyEventResult.handled;
+          }
+        }
+        return KeyEventResult.ignored;
+      },
+      child: AnimatedScale(
+        duration: const Duration(milliseconds: 150),
+        scale: _tvFocused ? 1.2 : 1.0,
+        child: Container(
+          padding: const EdgeInsets.all(4),
+          decoration: _tvFocused
+              ? BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: AppColors.accentPrimary, width: 2),
+                )
+              : null,
+          child: heart,
+        ),
       ),
     );
   }

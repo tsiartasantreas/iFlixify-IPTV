@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
@@ -23,6 +24,7 @@ class NetflixFocus extends StatefulWidget {
     this.scaleFactor = 1.08,
     this.isTv = false,
     this.shouldAutoFocus = false,
+    this.onActivate,
   });
 
   /// The child widget to wrap with focus animations.
@@ -39,6 +41,11 @@ class NetflixFocus extends StatefulWidget {
 
   /// Whether this widget should auto-focus on build (TV D-pad).
   final bool shouldAutoFocus;
+
+  /// D-pad activation callback (TV only). When set, pressing Select / Enter /
+  /// Space / Game Button A while this wrapper holds focus invokes it — same
+  /// action as a touch tap on the wrapped child (touch parity).
+  final VoidCallback? onActivate;
 
   @override
   State<NetflixFocus> createState() => _NetflixFocusState();
@@ -57,9 +64,8 @@ class _NetflixFocusState extends State<NetflixFocus>
       (Platform.isAndroid &&
           WidgetsBinding.instance.platformDispatcher.views.isNotEmpty &&
           MediaQueryData.fromView(
-                      WidgetsBinding.instance.platformDispatcher.views.first)
-                  .size
-                  .shortestSide >
+                WidgetsBinding.instance.platformDispatcher.views.first,
+              ).size.shortestSide >
               600);
 
   @override
@@ -69,33 +75,29 @@ class _NetflixFocusState extends State<NetflixFocus>
       vsync: this,
       duration: NetflixAnimations.focusScale,
     );
-    _scaleAnimation = Tween<double>(
-      begin: 1.0,
-      end: widget.scaleFactor,
-    ).animate(CurvedAnimation(
-      parent: _controller,
-      curve: NetflixAnimations.focusCurve,
-    ));
-    _glowAnimation = Tween<double>(
-      begin: 0.0,
-      end: 1.0,
-    ).animate(CurvedAnimation(
-      parent: _controller,
-      curve: NetflixAnimations.focusCurve,
-    ));
+    _scaleAnimation = Tween<double>(begin: 1.0, end: widget.scaleFactor)
+        .animate(
+          CurvedAnimation(
+            parent: _controller,
+            curve: NetflixAnimations.focusCurve,
+          ),
+        );
+    _glowAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _controller, curve: NetflixAnimations.focusCurve),
+    );
   }
 
   @override
   void didUpdateWidget(NetflixFocus oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.scaleFactor != widget.scaleFactor) {
-      _scaleAnimation = Tween<double>(
-        begin: 1.0,
-        end: widget.scaleFactor,
-      ).animate(CurvedAnimation(
-        parent: _controller,
-        curve: NetflixAnimations.focusCurve,
-      ));
+      _scaleAnimation = Tween<double>(begin: 1.0, end: widget.scaleFactor)
+          .animate(
+            CurvedAnimation(
+              parent: _controller,
+              curve: NetflixAnimations.focusCurve,
+            ),
+          );
     }
   }
 
@@ -129,6 +131,21 @@ class _NetflixFocusState extends State<NetflixFocus>
     return Focus(
       autofocus: widget.shouldAutoFocus,
       onFocusChange: _onFocusChange,
+      onKeyEvent: widget.onActivate == null
+          ? null
+          : (node, event) {
+              if (event is KeyDownEvent || event is KeyRepeatEvent) {
+                final key = event.logicalKey;
+                if (key == LogicalKeyboardKey.select ||
+                    key == LogicalKeyboardKey.enter ||
+                    key == LogicalKeyboardKey.space ||
+                    key == LogicalKeyboardKey.gameButtonA) {
+                  widget.onActivate!();
+                  return KeyEventResult.handled;
+                }
+              }
+              return KeyEventResult.ignored;
+            },
       child: AnimatedBuilder(
         animation: _controller,
         builder: (context, child) {
@@ -141,11 +158,13 @@ class _NetflixFocusState extends State<NetflixFocus>
               decoration: _hasFocus
                   ? BoxDecoration(
                       borderRadius: BorderRadius.circular(
-                          AppTheme.cardBorderRadius),
+                        AppTheme.cardBorderRadius,
+                      ),
                       boxShadow: [
                         BoxShadow(
-                          color: AppColors.accentPrimary
-                              .withValues(alpha: 0.3 * glow),
+                          color: AppColors.accentPrimary.withValues(
+                            alpha: 0.3 * glow,
+                          ),
                           blurRadius: 16 * glow,
                           spreadRadius: 2 * glow,
                         ),
@@ -156,8 +175,9 @@ class _NetflixFocusState extends State<NetflixFocus>
                         ),
                       ],
                       border: Border.all(
-                        color: AppColors.accentPrimary
-                            .withValues(alpha: 0.6 * glow),
+                        color: AppColors.accentPrimary.withValues(
+                          alpha: 0.6 * glow,
+                        ),
                         width: 2.0,
                       ),
                     )
@@ -197,10 +217,7 @@ class _NetflixFocusState extends State<NetflixFocus>
         builder: (context, child) {
           // On mobile we scale DOWN slightly on press (1.0 -> 0.96).
           final mobileScale = 1.0 - (0.04 * _glowAnimation.value);
-          return Transform.scale(
-            scale: mobileScale,
-            child: widget.child,
-          );
+          return Transform.scale(scale: mobileScale, child: widget.child);
         },
         child: widget.child,
       ),

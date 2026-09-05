@@ -55,9 +55,8 @@ class _NetflixBillboardState extends State<NetflixBillboard> {
       (Platform.isAndroid &&
           WidgetsBinding.instance.platformDispatcher.views.isNotEmpty &&
           MediaQueryData.fromView(
-                      WidgetsBinding.instance.platformDispatcher.views.first)
-                  .size
-                  .shortestSide >
+                WidgetsBinding.instance.platformDispatcher.views.first,
+              ).size.shortestSide >
               960);
 
   @override
@@ -121,10 +120,7 @@ class _NetflixBillboardState extends State<NetflixBillboard> {
               switchInCurve: NetflixAnimations.billboardCurve,
               switchOutCurve: NetflixAnimations.billboardCurve,
               transitionBuilder: (child, animation) {
-                return FadeTransition(
-                  opacity: animation,
-                  child: child,
-                );
+                return FadeTransition(opacity: animation, child: child);
               },
               child: KeyedSubtree(
                 key: ValueKey<int>(_currentIndex),
@@ -152,10 +148,7 @@ class _NetflixBillboardState extends State<NetflixBillboard> {
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.transparent,
-                      AppColors.bgBase,
-                    ],
+                    colors: [Colors.transparent, AppColors.bgBase],
                   ),
                 ),
               ),
@@ -172,10 +165,7 @@ class _NetflixBillboardState extends State<NetflixBillboard> {
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
-                    colors: [
-                      AppColors.bgBase,
-                      Colors.transparent,
-                    ],
+                    colors: [AppColors.bgBase, Colors.transparent],
                   ),
                 ),
               ),
@@ -279,12 +269,12 @@ class _NetflixBillboardState extends State<NetflixBillboard> {
       child: NetflixFocus(
         isTv: _isTv,
         scaleFactor: 1.05,
+        // D-pad activation on the wrapper focus node (touch parity: same
+        // action as tapping the button).
+        onActivate: () => widget.items[_currentIndex].onPlay?.call(),
         child: ElevatedButton.icon(
           onPressed: () => widget.items[_currentIndex].onPlay?.call(),
-          icon: Icon(
-            Icons.play_arrow,
-            size: _isTv ? 32 : 24,
-          ),
+          icon: Icon(Icons.play_arrow, size: _isTv ? 32 : 24),
           label: Text(
             'Play',
             style: TextStyle(
@@ -295,9 +285,7 @@ class _NetflixBillboardState extends State<NetflixBillboard> {
           style: ElevatedButton.styleFrom(
             backgroundColor: AppColors.textPrimary,
             foregroundColor: AppColors.bgBase,
-            padding: EdgeInsets.symmetric(
-              horizontal: _isTv ? 32 : 24,
-            ),
+            padding: EdgeInsets.symmetric(horizontal: _isTv ? 32 : 24),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(AppTheme.cardBorderRadius),
             ),
@@ -315,12 +303,10 @@ class _NetflixBillboardState extends State<NetflixBillboard> {
       child: NetflixFocus(
         isTv: _isTv,
         scaleFactor: 1.05,
+        onActivate: () => widget.items[_currentIndex].onMyList?.call(),
         child: OutlinedButton.icon(
           onPressed: () => widget.items[_currentIndex].onMyList?.call(),
-          icon: Icon(
-            Icons.add,
-            size: _isTv ? 28 : 20,
-          ),
+          icon: Icon(Icons.add, size: _isTv ? 28 : 20),
           label: Text(
             'My List',
             style: TextStyle(
@@ -332,9 +318,7 @@ class _NetflixBillboardState extends State<NetflixBillboard> {
             backgroundColor: AppColors.bgSurface.withValues(alpha: 0.7),
             foregroundColor: AppColors.textPrimary,
             side: const BorderSide(color: AppColors.textSecondary, width: 1),
-            padding: EdgeInsets.symmetric(
-              horizontal: _isTv ? 32 : 24,
-            ),
+            padding: EdgeInsets.symmetric(horizontal: _isTv ? 32 : 24),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(AppTheme.cardBorderRadius),
             ),
@@ -353,10 +337,7 @@ class _NetflixBillboardState extends State<NetflixBillboard> {
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [
-            AppColors.bgElevated,
-            AppColors.bgSurface,
-          ],
+          colors: [AppColors.bgElevated, AppColors.bgSurface],
         ),
       ),
       child: Center(

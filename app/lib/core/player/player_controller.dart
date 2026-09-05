@@ -118,6 +118,12 @@ class PlayerController extends ChangeNotifier {
   /// Fires if playback does not start within the timeout window.
   Timer? _timeoutTimer;
 
+  /// Whether the startup timeout is currently scheduled. While resuming from
+  /// a saved position the player is opened paused (`autoPlay: false`); the
+  /// timeout must NOT run while paused-for-resume — it is armed by the first
+  /// [play] call instead (see [_armStartupTimeout]).
+  bool _timeoutArmed = false;
+
   late final StreamSubscription<Duration> _positionSub;
   late final StreamSubscription<Duration> _durationSub;
   late final StreamSubscription<bool> _playingSub;
@@ -405,7 +411,25 @@ class PlayerController extends ChangeNotifier {
     _applyAudioDelayProperty();
     _applySubDelayProperty();
 
-    // Start a timeout -- if playback never begins, surface an error.
+    // Start the startup timeout -- if playback never begins, surface an
+    // error. When [autoPlay] is false (the resume flow opens the player
+    // paused so the player screen can seek first), the timer is NOT started
+    // here: a paused player is not a timed-out player. The timeout is armed
+    // lazily by the first [play] call (see [_armStartupTimeout]) so the
+    // paused-for-resume window is never mistaken for a dead stream.
+    _timeoutTimer?.cancel();
+    _timeoutArmed = false;
+    if (autoPlay) {
+      _armStartupTimeout();
+    }
+  }
+
+  /// Arms the 15-second startup timeout exactly once per [open] call. A no-op
+  /// when the timeout is already running. Called immediately for
+  /// `autoPlay: true` opens and lazily from [play] for paused opens.
+  void _armStartupTimeout() {
+    if (_timeoutArmed) return;
+    _timeoutArmed = true;
     _timeoutTimer?.cancel();
     _timeoutTimer = Timer(const Duration(seconds: 15), () {
       if (!_isPlaying && _error == null) {
@@ -427,7 +451,13 @@ class PlayerController extends ChangeNotifier {
   }
 
   /// Start or resume playback.
-  void play() => _player.play();
+  void play() {
+    // First play() after a paused open arms the startup timeout (see
+    // [open]); for autoPlay opens the timeout is already armed and this is
+    // a no-op.
+    _armStartupTimeout();
+    _player.play();
+  }
 
   /// Pause playback.
   void pause() => _player.pause();
